@@ -10,18 +10,19 @@ Models are already installed: `qwen2.5:14b` and `nomic-embed-text` were pulled d
 
 ## Tasks
 
-- [ ] 1. Establish the fork and workspace
-  - [ ] 1.1 Fork and clone
-    - Fork `lfnovo/open-notebook` to the team organisation
-    - Clone into the workspace root, add `upstream` pointing at `lfnovo/open-notebook`
-    - Check out tag `v1.14.0` onto a long-lived branch named `eero`
+- [x] 1. Establish the fork and workspace
+  - [x] 1.1 Fork and clone
+    - Forked to `Najm557/eeroNotebook` — the account has no organisations, so the fork sits on the personal account
+    - Workspace root is the repository; `upstream` points at `lfnovo/open-notebook`, `origin` at the fork
+    - Tag `v1.14.0` checked out onto branch `eero`, which is pushed and tracking
     - _Requirements: 14.1, 14.2_
-  - [ ] 1.2 Retire evaluation clones
-    - Delete `research/open-notebook` and `research/SurfSense`, reclaiming roughly 563 MB
-    - Confirm `CONTEXT.md` and `docs/adr/` survive at the workspace root
-  - [ ] 1.3 Record the deployment target
-    - Create `.env` holding `EERONOTEBOOK_HOST=10.17.8.52` as the single source of the address **(\*)**
-    - Confirm no other file references the address literally
+  - [x] 1.2 Retire evaluation clones
+    - Removed `research/`, reclaiming 561 MB
+    - `CONTEXT.md`, `docs/adr/` and `.kiro/specs/` survive and are committed
+    - `.gitignore` needed a scoped negation: upstream's broad `specs/` rule would otherwise exclude `.kiro/specs`
+  - [x] 1.3 Record the deployment target
+    - `deploy/.env` holds `EERONOTEBOOK_HOST=10.17.8.52`, generated on the host, gitignored **(\*)**
+    - `deploy/.env.example` is the committed template
     - _Requirements: 13.7_
 
 - [ ] 2. Build the Inference Gateway
@@ -31,41 +32,45 @@ Models are already installed: `qwen2.5:14b` and `nomic-embed-text` were pulled d
     - Verified the model server cannot usefully be containerised here: `llama3.2:3b` ran at 87.8 tok/s native against 0.50 tok/s in a container, with `library=cpu` and no `/dev/dri`
     - Conclusion: Ollama stays on loopback as a backend; only the gateway crosses to it
     - _Requirements: 3.1_
-  - [ ] 2.2 Add the gateway container to the stack
-    - `eeronotebook-inference` running **LiteLLM** from a static config file, no database, unpublished, on `eeronotebook_internal` only
-    - Expose an OpenAI-compatible surface with both a chat completion route and an embedding route
-    - Forward to the backend via `host.docker.internal:11434`, with `extra_hosts: ["host.docker.internal:host-gateway"]` per `~/stacks/earovoice/`
-    - Require a credential from the application, so the gateway is not an open inference proxy on the shared network
+  - [x] 2.2 Add the gateway container to the stack
+    - `eeronotebook-inference` runs LiteLLM from `deploy/litellm-config.yaml`, no database, unpublished
+    - Serves both routes; verified `/v1/embeddings` returns 768 dimensions and `/v1/chat/completions` answers
+    - Reaches the backend via the host alias with `extra_hosts: host-gateway`, per `~/stacks/earovoice/`
+    - Requires a credential: verified an unauthenticated request to `/v1/models` returns `401`
+    - The image ships no `curl`, so the healthcheck probes with its own Python — a curl-based probe left the container permanently unhealthy and blocked the app on the dependency
     - _Requirements: 3.1, 3.6, 13.2, 13.9_
-  - [ ] 2.3 Map logical model names onto backend models
-    - Define a synthesis name resolving to `qwen2.5:14b` and an embedding name resolving to `nomic-embed-text`
-    - Keep the mapping in gateway configuration, so changing the backing model does not touch application settings
-    - Confirm `qwen2.5:14b` reports `tools` among its capabilities, since Requirement 8.2 depends on it
+  - [x] 2.3 Map logical model names onto backend models
+    - `eero-synthesis` → `qwen2.5:14b`, `eero-background` → `llama3.2:3b`, `eero-embed` → `nomic-embed-text`
+    - Mapping lives only in gateway configuration
+    - `qwen2.5:14b` confirmed tool-capable, which Requirement 8.2 depends on
+    - No synthesis-to-background fallback configured: a silent downgrade would weaken grounded answers with no signal
     - _Requirements: 3.3, 3.7_
   - [ ] 2.4 Verify the boundary holds
-    - Confirm the application reaches chat and embedding routes through the gateway alone
-    - Confirm no eeroNotebook configuration contains a host address or a model server address
-    - Stop the gateway and confirm the application reports a clear fault rather than failing silently
-    - Add a gateway health check for uptime monitoring
+    - Verified the app reaches chat and embedding routes through the gateway alone, and that responses carry the logical name (`model=eero-synthesis`) rather than the backend model
+    - Verified no host address or model server address appears in the app container's environment
+    - Container healthcheck in place; the Uptime Kuma monitor is task 4.2
+    - **Outstanding:** stop the gateway and confirm the app reports a clear fault rather than failing silently
     - _Requirements: 3.5, 3.8, 13.10_
 
 - [ ] 3. Deploy the stack, unmodified
-  - [ ] 3.1 Write the compose project at `~/stacks/eeronotebook/`
-    - Services: `eeronotebook-app`, `eeronotebook-db` (SurrealDB v2), `eeronotebook-inference` from task 2
-    - Publish 8502 and 5055 only; do not publish SurrealDB, since `labplatform-app` already holds 8000
-    - Named volumes for database and application data, not bind mounts
-    - Networks: `eeronotebook_internal` plus external `monitoring_net`
+  - [x] 3.1 Write the compose project
+    - `deploy/docker-compose.yml`, project `eeronotebook`, deployed at `~/stacks/eeronotebook/`
+    - App built from this branch rather than pulled, so image and source cannot drift
+    - 8502 and 5055 published; database and gateway unpublished
+    - Named volumes `db_data` and `app_data`; `eeronotebook_internal` plus external `monitoring_net`
+    - Dozzle labels applied, matching the convention in `~/stacks/llm-server/`
     - _Requirements: 13.1, 13.2, 13.3_
-  - [ ] 3.2 Configure environment
-    - Set `OPEN_NOTEBOOK_ENCRYPTION_KEY` to a generated secret
-    - Replace SurrealDB's default `root:root` credentials
-    - Set `OPEN_NOTEBOOK_WORKER_MAX_TASKS=1`
-    - Set `OPEN_NOTEBOOK_PASSWORD` as an interim gate until task 5 lands
+  - [x] 3.2 Configure environment
+    - All four secrets generated on the host into `deploy/.env`, mode 600, never transiting a client
+    - SurrealDB credentials replaced; compose fails fast if any secret is unset
+    - `OPEN_NOTEBOOK_WORKER_MAX_TASKS=1` applied to the worker supervisord runs in-image
+    - `OPEN_NOTEBOOK_PASSWORD` set as the interim gate until task 5
     - _Requirements: 13.4, 3.4_
-  - [ ] 3.3 Point the application at the gateway
-    - Register a single OpenAI-compatible provider credential addressing `eeronotebook-inference` on the stack network
-    - Select the logical synthesis and embedding names defined in task 2.3, not backend model names
-    - Verify chunk sizing respects the embedder's 2048-token window
+  - [x] 3.3 Point the application at the gateway
+    - One `openai_compatible` credential at `http://eeronotebook-inference:4000/v1`; connection test passed
+    - Discovery returned the three logical names; all registered
+    - Defaults set to `eero-synthesis` for chat, transformation, tools and large-context, and `eero-embed` for embedding
+    - **Outstanding:** confirm chunk sizing respects the embedder's 2048-token window
     - _Requirements: 1.3, 1.4, 3.1, 3.8_
   - [ ] 3.4 Validate the baseline end to end
     - Add a document, a web page, and a video URL as Sources; confirm each processes and that a failure in one does not block the others
