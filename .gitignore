@@ -151,3 +151,11 @@ docker-compose.override.yml
 # Local QA/debug artifacts
 screenshot-*.png
 history.txt
+
+# --- eeroNotebook additions ---
+# Kiro-provided skill definitions (not part of this project)
+.kiro/skills/
+
+# Upstream's broad `specs/` rule above also matches .kiro/specs, where this
+# fork's requirements/design/tasks live. Re-include them.
+!.kiro/specs/
