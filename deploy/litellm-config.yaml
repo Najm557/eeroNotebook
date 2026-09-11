@@ -1,0 +1,47 @@
+# ─── eeroNotebook Inference Gateway ───────────────────────────────────────────
+# The application selects logical names from this file, never backend model
+# names. Moving inference to different hardware or a different provider is a
+# change to litellm_params below and nothing else. See docs/adr/0004.
+#
+# Deliberately database-free at v1: no Postgres, no spend tracking, no per-user
+# virtual keys. One container, one config file.
+# ──────────────────────────────────────────────────────────────────────────────
+
+model_list:
+  # Grounded answers and study artifact generation. Tool-capable, which is what
+  # keeps flashcard, quiz and mind map output inside a schema.
+  - model_name: eero-synthesis
+    litellm_params:
+      model: ollama_chat/qwen2.5:14b
+      api_base: os.environ/INFERENCE_BACKEND_URL
+
+  # Cheap ancillary work — titling, short summaries — so the 14B is not
+  # occupied by work that does not need it.
+  - model_name: eero-background
+    litellm_params:
+      model: ollama_chat/llama3.2:3b
+      api_base: os.environ/INFERENCE_BACKEND_URL
+
+  # Source ingestion depends on this as much as chat depends on synthesis.
+  # Note the 2048-token input window when sizing chunks.
+  - model_name: eero-embed
+    litellm_params:
+      model: ollama/nomic-embed-text
+      api_base: os.environ/INFERENCE_BACKEND_URL
+
+general_settings:
+  # The application must present this key. Without it the gateway would be an
+  # open inference proxy to anything else on the shared network.
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  # Ollama rejects some OpenAI-only parameters; drop them rather than fail.
+  drop_params: true
+  # Local inference under load is slower than a hosted API. This is generous
+  # on purpose: a 14B answering from several sources is not a fast request.
+  request_timeout: 600
+  num_retries: 2
+
+# No fallback from synthesis to the smaller model is configured on purpose.
+# A silent downgrade would produce weaker grounded answers and less reliable
+# structured output with no signal that it happened.

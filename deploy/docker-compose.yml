@@ -1,0 +1,147 @@
+# ─── eeroNotebook — private study notebook stack ──────────────────────────────
+# Deployed on the Dev Server at ~/stacks/eeronotebook/ alongside the other
+# project stacks, joining the shared monitoring network.
+#
+#   docker compose up -d --build
+#   curl http://localhost:5055/health
+#
+# Every eeroNotebook component runs as a container (Requirement 13.9). The one
+# exception is the inference backend: Metal is unreachable from a Linux
+# container on macOS, so the model server stays native and is reached only
+# through eeroNotebook-inference. See docs/adr/0004.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: eeronotebook
+
+services:
+  # ─── Database ───────────────────────────────────────────────────────────────
+  # Deliberately unpublished. The app reaches it over the stack network; host
+  # port 8000 is taken by labplatform-app in any case.
+  eeronotebook-db:
+    image: surrealdb/surrealdb:v2
+    container_name: eeronotebook-db
+    # List form so an interpolated password containing spaces stays one argument.
+    command:
+      - "start"
+      - "--log"
+      - "info"
+      - "--user"
+      - "${SURREAL_USER:?SURREAL_USER must be set}"
+      - "--pass"
+      - "${SURREAL_PASSWORD:?SURREAL_PASSWORD must be set}"
+      - "rocksdb:/mydata/database.db"
+    user: root
+    volumes:
+      - db_data:/mydata
+    environment:
+      SURREAL_EXPERIMENTAL_GRAPHQL: "true"
+    networks:
+      - eeronotebook_internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/surreal", "is-ready", "--endpoint", "http://localhost:8000"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    labels:
+      - "dozzle.enable=true"
+      - "dozzle.group=eeronotebook"
+
+  # ─── Inference Gateway ──────────────────────────────────────────────────────
+  # The application's only source of inference. Presents one OpenAI-compatible
+  # surface and forwards to whichever backend serves the models, so replacing
+  # the backend is a change here rather than in the application.
+  # Unpublished: reachable only from inside the stack.
+  eeronotebook-inference:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: eeronotebook-inference
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set}
+      # The backend. This is the only address in the stack that points at the
+      # host, and this is the only container permitted to reach it.
+      INFERENCE_BACKEND_URL: ${INFERENCE_BACKEND_URL:-http://host.docker.internal:11434}
+    extra_hosts:
+      # Maps to the host's loopback interface on this runtime, which is why the
+      # backend can stay bound to 127.0.0.1. On Linux this does NOT reach host
+      # loopback — see docs/adr/0004 before relocating this stack.
+      - "host.docker.internal:host-gateway"
+    networks:
+      - eeronotebook_internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4000/health/liveliness || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    labels:
+      - "dozzle.enable=true"
+      - "dozzle.group=eeronotebook"
+
+  # ─── Application ────────────────────────────────────────────────────────────
+  # Built from this fork rather than pulled, so the image always matches the
+  # branch. The image runs api, worker and frontend under supervisord; the
+  # worker is required or source processing and embeddings queue silently.
+  eeronotebook-app:
+    build:
+      context: ..
+      target: runtime
+    image: eeronotebook-app:local
+    container_name: eeronotebook-app
+    ports:
+      - "8502:8502"  # Web UI
+      - "5055:5055"  # REST API
+    environment:
+      # Encrypts stored provider credentials at rest. Required.
+      OPEN_NOTEBOOK_ENCRYPTION_KEY: ${OPEN_NOTEBOOK_ENCRYPTION_KEY:?OPEN_NOTEBOOK_ENCRYPTION_KEY must be set}
+
+      SURREAL_URL: ws://eeronotebook-db:8000/rpc
+      SURREAL_USER: ${SURREAL_USER}
+      SURREAL_PASSWORD: ${SURREAL_PASSWORD}
+      SURREAL_NAMESPACE: ${SURREAL_NAMESPACE:-eeronotebook}
+      SURREAL_DATABASE: ${SURREAL_DATABASE:-eeronotebook}
+
+      # One background task at a time: this stack shares the inference backend
+      # with earovoice-api, and parallel jobs would contend for it.
+      OPEN_NOTEBOOK_WORKER_MAX_TASKS: "1"
+
+      # Interim gate until per-user identity lands (spec task 5.3). Upstream's
+      # auth is a single shared password, which is not the end state.
+      OPEN_NOTEBOOK_PASSWORD: ${OPEN_NOTEBOOK_PASSWORD:?OPEN_NOTEBOOK_PASSWORD must be set}
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      eeronotebook-db:
+        condition: service_healthy
+      eeronotebook-inference:
+        condition: service_healthy
+    networks:
+      - eeronotebook_internal
+      - monitoring_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5055/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    labels:
+      - "dozzle.enable=true"
+      - "dozzle.group=eeronotebook"
+
+networks:
+  eeronotebook_internal:
+    driver: bridge
+  monitoring_net:
+    external: true
+    name: monitoring_net
+
+volumes:
+  # Named rather than bind-mounted: file sharing into the runtime's VM is slow
+  # enough to matter for a database.
+  db_data:
+  app_data:
