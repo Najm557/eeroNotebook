@@ -1,0 +1,184 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "2.4 Verify the boundary holds": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547373
+      },
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144556830
+      }
+    ],
+    "3.4 Validate the baseline end to end": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547442
+      },
+      {
+        "executionId": "744c0d57-0438-40a8-befa-2f0506fdd162",
+        "chatSessionId": "sess_dd97725b-894d-44ab-ad01-6c4f960b498f",
+        "timestamp": 1789164042001
+      }
+    ],
+    "4.1 Route through the existing reverse proxy **(\\*)**": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547473
+      },
+      {
+        "executionId": "f3f65db1-4438-4e5c-9a21-a031988fee09",
+        "chatSessionId": "sess_dd97725b-894d-44ab-ad01-6c4f960b498f",
+        "timestamp": 1789156619267
+      }
+    ],
+    "4.2 Monitoring and backups **(\\*)**": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547507
+      },
+      {
+        "executionId": "f3f65db1-4438-4e5c-9a21-a031988fee09",
+        "chatSessionId": "sess_dd97725b-894d-44ab-ad01-6c4f960b498f",
+        "timestamp": 1789158173055
+      }
+    ],
+    "5.1 Add a dedicated GoTrue service": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547536
+      }
+    ],
+    "5.2 Build the Identity_Boundary": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547563
+      }
+    ],
+    "5.3 Replace the shared password": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547591
+      }
+    ],
+    "6.1 Add owner scope to the data model": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547621
+      }
+    ],
+    "6.2 Enforce ownership on every path": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547646
+      }
+    ],
+    "6.3 Implement Shares": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547691
+      }
+    ],
+    "7.1 Model Study_Progress per member": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547715
+      }
+    ],
+    "8.1 Structured generation": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547745
+      }
+    ],
+    "8.2 Flashcards": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547771
+      }
+    ],
+    "8.3 Quizzes": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547794
+      }
+    ],
+    "8.4 Mind maps": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547815
+      }
+    ],
+    "8.5 Text artifacts as configuration": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547839
+      }
+    ],
+    "9.1 Verify against the v1 goals": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547861
+      }
+    ],
+    "9.2 Confirm outstanding risks": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547881
+      }
+    ],
+    "9.3 Optional cleanup outside this repository": [
+      {
+        "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
+        "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
+        "timestamp": 1789144547912
+      }
+    ],
+    "4. Bring the stack into operations": [
+      {
+        "executionId": "f3f65db1-4438-4e5c-9a21-a031988fee09",
+        "chatSessionId": "sess_dd97725b-894d-44ab-ad01-6c4f960b498f",
+        "timestamp": 1789156615965
+      },
+      {
+        "executionId": "f3f65db1-4438-4e5c-9a21-a031988fee09",
+        "chatSessionId": "sess_dd97725b-894d-44ab-ad01-6c4f960b498f",
+        "timestamp": 1789160484211
+      }
+    ],
+    "3.5 Pin chunk sizing to the embedder's window": [
+      {
+        "executionId": "744c0d57-0438-40a8-befa-2f0506fdd162",
+        "chatSessionId": "sess_dd97725b-894d-44ab-ad01-6c4f960b498f",
+        "timestamp": 1789223601161
+      }
+    ],
+    "3. Deploy the stack, unmodified": [
+      {
+        "executionId": "744c0d57-0438-40a8-befa-2f0506fdd162",
+        "chatSessionId": "sess_dd97725b-894d-44ab-ad01-6c4f960b498f",
+        "timestamp": 1789226317806
+      }
+    ]
+  }
+}
