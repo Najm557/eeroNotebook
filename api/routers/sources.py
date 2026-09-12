@@ -84,6 +84,31 @@ def _truncate_error(msg: Optional[str], limit: int = 200) -> Optional[str]:
     return msg if len(msg) <= limit else msg[:limit] + "…"
 
 
+def _apply_embedding_failure(
+    status: Optional[str],
+    processing_info: Optional[dict[str, Any]],
+    embedding_error: Optional[str],
+) -> tuple[Optional[str], Optional[dict[str, Any]]]:
+    """Report a failed embedding job as a failure of the source itself.
+
+    Text extraction and embedding run as two separate jobs and only the first
+    is linked to the source, so a source whose text extracted fine but whose
+    embedding failed reads `completed` with no error - which makes an
+    unreachable Inference Gateway invisible to the member (Requirement 3.5).
+    Reusing the existing `failed` status means the fault shows up in the UI
+    that already reports failed sources, including its retry action.
+
+    An extraction failure is left alone: it is the earlier and more
+    fundamental fault, and the member needs to see that one first.
+    """
+    if not embedding_error or status == "failed":
+        return status, processing_info
+
+    info = dict(processing_info or {})
+    info["error"] = _truncate_error(embedding_error)
+    return "failed", info
+
+
 SOURCE_SORT_FIELDS = {
     "created": "created",
     "updated": "updated",
@@ -308,7 +333,15 @@ async def get_sources(
             string::lowercase(title OR '') AS title_sort,
             ({SOURCE_TYPE_EXPRESSION}) AS type,
             (SELECT VALUE count() FROM source_insight WHERE source = $parent.id GROUP ALL)[0].count OR 0 AS insights_count,
-            (SELECT VALUE id FROM source_embedding WHERE source = $parent.id LIMIT 1) != [] AS embedded
+            (SELECT VALUE id FROM source_embedding WHERE source = $parent.id LIMIT 1) != [] AS embedded,
+            -- Embedding runs as its own job, unlinked from `command`, so its
+            -- failure is picked up here rather than from the fetched command.
+            -- Guarded on `embedded` below, not in SQL, since that column is
+            -- already being selected.
+            (SELECT VALUE error_message FROM command
+             WHERE app = 'open_notebook' AND name = 'embed_source'
+               AND args.source_id = <string> $parent.id AND status = 'failed'
+             LIMIT 1)[0] AS embedding_error
             FROM {from_clause}
             {order_clause}
             LIMIT $limit START $offset
@@ -345,6 +378,11 @@ async def get_sources(
                 # Command exists but FETCH failed to resolve it (broken reference)
                 command_id = str(command)
                 status = "unknown"
+
+            if not row.get("embedded"):
+                status, processing_info = _apply_embedding_failure(
+                    status, processing_info, row.get("embedding_error")
+                )
 
             response_list.append(
                 SourceListResponse(
@@ -773,6 +811,10 @@ async def get_source(source_id: str):
                 logger.warning(f"Failed to get status for source {source_id}: {e}")
                 status = "unknown"
 
+        status, processing_info = _apply_embedding_failure(
+            status, processing_info, await source.get_embedding_failure()
+        )
+
         embedded_chunks = await source.get_embedded_chunks()
 
         # Get associated notebooks
@@ -849,12 +891,24 @@ async def get_source_status(source_id: str):
         if not source:
             raise HTTPException(status_code=404, detail="Source not found")
 
+        # Reported even for a legacy source: embedding can be triggered on one
+        # from the UI, and its failure is the member's only signal that the
+        # Inference Gateway is unreachable (Requirement 3.5).
+        embedding_error = await source.get_embedding_failure()
+
         # Check if this is a legacy source (no command)
         if not source.command:
+            status, processing_info = _apply_embedding_failure(
+                None, None, embedding_error
+            )
             return SourceStatusResponse(
-                status=None,
-                message="Legacy source (completed before async processing)",
-                processing_info=None,
+                status=status,
+                message=(
+                    f"Embedding failed: {_truncate_error(embedding_error)}"
+                    if embedding_error
+                    else "Legacy source (completed before async processing)"
+                ),
+                processing_info=processing_info,
                 command_id=None,
             )
 
@@ -863,8 +917,15 @@ async def get_source_status(source_id: str):
             status = await source.get_status()
             processing_info = await source.get_processing_progress()
 
+            extraction_status = status
+            status, processing_info = _apply_embedding_failure(
+                status, processing_info, embedding_error
+            )
+
             # Generate descriptive message based on status
-            if status == "completed":
+            if status == "failed" and extraction_status != "failed":
+                message = f"Embedding failed: {_truncate_error(embedding_error)}"
+            elif status == "completed":
                 message = "Source processing completed successfully"
             elif status == "failed":
                 message = "Source processing failed"

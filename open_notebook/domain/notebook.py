@@ -473,6 +473,40 @@ class Source(ObjectModel):
             logger.warning(f"Failed to get command progress for {self.command}: {e}")
             return None
 
+    async def get_embedding_failure(self) -> Optional[str]:
+        """Return the error from a failed embed_source job for this source.
+
+        Embedding is submitted fire-and-forget (see vectorize()), so its failure
+        lands on a separate command record that this source's own `command`
+        field never points at. Without surfacing it, an unreachable inference
+        gateway leaves a source reading `completed` with no embeddings and no
+        error at all - the member is told nothing (Requirement 3.5).
+
+        Only reported while the source still has no embeddings, so a stale
+        failure stops being reported as soon as a retry succeeds.
+        """
+        if not self.id:
+            return None
+
+        try:
+            result = await repo_query(
+                """
+                SELECT VALUE error_message FROM command
+                WHERE app = 'open_notebook'
+                  AND name = 'embed_source'
+                  AND args.source_id = <string> $source_id
+                  AND status = 'failed'
+                  AND (SELECT VALUE id FROM source_embedding
+                       WHERE source = $source_id LIMIT 1) = []
+                LIMIT 1
+                """,
+                {"source_id": ensure_record_id(self.id)},
+            )
+            return result[0] if result else None
+        except Exception as e:
+            logger.warning(f"Failed to check embedding failure for {self.id}: {e}")
+            return None
+
     async def get_context(
         self,
         context_size: Literal["short", "long"] = "short",
