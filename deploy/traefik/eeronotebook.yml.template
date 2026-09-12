@@ -1,0 +1,84 @@
+# ─── eeroNotebook ingress ─────────────────────────────────────────────────────
+# Rendered by setup-ingress.sh into mon-traefik's dynamic directory
+# (~/stacks/monitoring/traefik/), which it watches, so installing this takes
+# effect without restarting the proxy or interrupting any other stack.
+#
+# eeroNotebook registers HERE rather than in its own compose file because
+# mon-traefik runs the file provider only — it is started with
+# --providers.file.directory and reads no Docker labels. It already holds
+# 80/443/8080, so a second proxy would contend for them (Requirement 13.3).
+#
+# __DOMAIN__ is substituted from EERONOTEBOOK_DOMAIN in deploy/.env, so the name
+# is defined once. Upstreams are container names on monitoring_net: no host
+# address appears in this file (Requirement 13.7). The Dev Server's address
+# reaches TLS only as a SAN in the generated certificate.
+
+http:
+  routers:
+    # --- UI over TLS: the front door ---
+    # Only 8502 is proxied. Next.js rewrites /api/* to the API on 5055 inside
+    # the image, so the browser draws UI and API from one HTTPS origin and no
+    # request falls back to a cleartext port (Requirement 13.5).
+    eeronotebook-secure:
+      rule: "Host(`__DOMAIN__`)"
+      service: eeronotebook-ui
+      entryPoints:
+        - websecure
+      tls: {}
+
+    # --- UI over plain HTTP: redirected ---
+    # The redirect is attached to this router, deliberately not to the `web`
+    # entrypoint. Every other stack behind this proxy — legendary-hunts,
+    # earovoice, learninglab, uptime-kuma, dozzle — is HTTP-only, and an
+    # entrypoint-wide redirect would break all of them.
+    eeronotebook:
+      rule: "Host(`__DOMAIN__`)"
+      service: eeronotebook-ui
+      entryPoints:
+        - web
+      middlewares:
+        - eeronotebook-https
+
+    # --- API over TLS ---
+    # A direct door to 5055 for callers that are not the browser: the MCP
+    # interface, health checks, scripted use. The UI does not use it; it reaches
+    # the API through /api on its own origin.
+    eeronotebook-api-secure:
+      rule: "Host(`api.__DOMAIN__`)"
+      service: eeronotebook-api
+      entryPoints:
+        - websecure
+      tls: {}
+
+    eeronotebook-api:
+      rule: "Host(`api.__DOMAIN__`)"
+      service: eeronotebook-api
+      entryPoints:
+        - web
+      middlewares:
+        - eeronotebook-https
+
+  middlewares:
+    eeronotebook-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+  services:
+    eeronotebook-ui:
+      loadBalancer:
+        servers:
+          - url: "http://eeronotebook-app:8502"
+    eeronotebook-api:
+      loadBalancer:
+        servers:
+          - url: "http://eeronotebook-app:5055"
+
+# Issued by the private eeroNotebook CA that certs/generate-certs.sh creates.
+# Registered as a certificate rather than as the default: mon-traefik's default
+# certificate belongs to learninglab, and declaring a second default would leave
+# which one wins undefined. Traefik selects this one by SNI instead.
+tls:
+  certificates:
+    - certFile: /etc/traefik/dynamic/eeronotebook.crt
+      keyFile: /etc/traefik/dynamic/eeronotebook.key

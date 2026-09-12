@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Nightly backup of eeroNotebook's persistent data (Requirement 13.8).
+  Rendered and installed by install-schedule.sh; do not edit the installed copy.
+
+  A user LaunchAgent, not a LaunchDaemon, for two reasons. A daemon would need
+  sudo, which this host does not grant without a password. And a daemon runs
+  before anyone logs in — where OrbStack, and therefore docker, does not exist,
+  so the job would fail every night at a time nobody looks.
+
+  StartCalendarInterval also survives sleep: if the Mac is asleep at the
+  scheduled time, launchd runs the job once on wake rather than skipping it.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.eeronotebook.backup</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>__SCRIPT__</string>
+	</array>
+
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>__HOUR__</integer>
+		<key>Minute</key>
+		<integer>__MINUTE__</integer>
+	</dict>
+
+	<!-- launchd hands a job a near-empty PATH, and OrbStack's docker is in
+	     neither /usr/bin nor /bin. backup.sh also probes for it, so this is
+	     belt and braces. -->
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>__HOME__/.orbstack/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+
+	<key>WorkingDirectory</key>
+	<string>__WORKDIR__</string>
+
+	<!-- Both streams go to one log: backup.sh writes its progress to stdout and
+	     its failures to stderr, and reading them interleaved is the point. -->
+	<key>StandardOutPath</key>
+	<string>__LOG__</string>
+	<key>StandardErrorPath</key>
+	<string>__LOG__</string>
+
+	<!-- Nothing to do at load time; the schedule is the only trigger. -->
+	<key>RunAtLoad</key>
+	<false/>
+</dict>
+</plist>

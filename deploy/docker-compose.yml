@@ -5,6 +5,10 @@
 #   docker compose up -d --build
 #   curl http://localhost:5055/health
 #
+# TLS and routing are not configured here. mon-traefik reads a watched directory
+# of configuration files and no Docker labels, so ingress is registered by
+# running ./traefik/setup-ingress.sh once on the host.
+#
 # Every eeroNotebook component runs as a container (Requirement 13.9). The one
 # exception is the inference backend: Metal is unreachable from a Linux
 # container on macOS, so the model server stays native and is reached only
@@ -71,6 +75,13 @@ services:
       - "host.docker.internal:host-gateway"
     networks:
       - eeronotebook_internal
+      # monitoring_net is here so mon-uptime-kuma can reach /health/liveliness
+      # (Requirement 13.10): all inference depends on this container, and every
+      # monitor on this host probes by container name over that network. It is
+      # still not published to the host, so Requirement 13.2 holds, and the
+      # inference routes still demand LITELLM_MASTER_KEY — reachability alone
+      # grants nothing. Only the unauthenticated liveness route is open.
+      - monitoring_net
     restart: unless-stopped
     healthcheck:
       # The LiteLLM image ships no curl, so probe with the Python already in it.
@@ -97,9 +108,13 @@ services:
       target: runtime
     image: eeronotebook-app:local
     container_name: eeronotebook-app
+    # Unchanged by the TLS work: mon-traefik reaches this container by name over
+    # monitoring_net, so fronting it added no host port and could not collide
+    # with anything (Requirement 13.3). These two stay published as the local
+    # debugging path.
     ports:
-      - "8502:8502"  # Web UI
-      - "5055:5055"  # REST API
+      - "8502:8502"  # Web UI  — served over TLS as https://<EERONOTEBOOK_DOMAIN>
+      - "5055:5055"  # REST API — served over TLS as https://api.<EERONOTEBOOK_DOMAIN>
     environment:
       # Encrypts stored provider credentials at rest. Required.
       OPEN_NOTEBOOK_ENCRYPTION_KEY: ${OPEN_NOTEBOOK_ENCRYPTION_KEY:?OPEN_NOTEBOOK_ENCRYPTION_KEY must be set}
@@ -114,9 +129,26 @@ services:
       # with earovoice-api, and parallel jobs would contend for it.
       OPEN_NOTEBOOK_WORKER_MAX_TASKS: "1"
 
+      # Tokens per embedding chunk, held to nomic-embed-text's 2048-token input
+      # window (Requirement 1.4). Forwarded from .env rather than hardcoded, and
+      # required here — compose reads .env for interpolation only, so the .env
+      # entry would be inert without this line. The application reads chunking
+      # constants at import, so this container must be restarted for a change to
+      # take effect.
+      OPEN_NOTEBOOK_CHUNK_SIZE: ${OPEN_NOTEBOOK_CHUNK_SIZE:-400}
+
       # Interim gate until per-user identity lands (spec task 5.3). Upstream's
       # auth is a single shared password, which is not the end state.
       OPEN_NOTEBOOK_PASSWORD: ${OPEN_NOTEBOOK_PASSWORD:?OPEN_NOTEBOOK_PASSWORD must be set}
+
+      # The HTTPS origin the browser is told to call the API on. Left unset,
+      # upstream derives it from the request as https://<host>:5055 — a port
+      # mon-traefik neither serves nor terminates TLS on, so the UI would break
+      # and API traffic would leave the origin in clear text. The frontend
+      # rewrites /api/* to the API inside the image, so one TLS origin covers
+      # both (Requirement 13.5). Consequence: the UI is reached by name through
+      # the proxy, not by http://<host>:8502, which stays a debugging path only.
+      API_URL: https://${EERONOTEBOOK_DOMAIN:-eeronotebook.local}
     volumes:
       - app_data:/app/data
     depends_on:

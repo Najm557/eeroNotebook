@@ -1,0 +1,11 @@
+# Generated TLS material. The CA private key in particular is a real secret and
+# is generated on the Dev Server, never on a client. Only the scripts and the
+# routing template are committed.
+certs/*.pem
+certs/*.crt
+certs/*.key
+certs/*.csr
+certs/*.srl
+certs/*.cnf
+!certs/.gitkeep
+!certs/generate-certs.sh
