@@ -323,6 +323,68 @@ class TestGenerateEmbedding:
                 await generate_embeddings(texts)
             assert mock_model.aembed.call_count == EMBEDDING_MAX_RETRIES
 
+    @pytest.mark.parametrize(
+        "content_type_name",
+        [None, "PLAIN", "MARKDOWN", "HTML"],
+    )
+    @pytest.mark.asyncio
+    async def test_no_text_reaching_the_model_exceeds_the_chunk_budget(
+        self, content_type_name
+    ):
+        """
+        The mean-pooling path must not hand the embedder an over-window input.
+
+        generate_embedding() takes one of two routes: text at or under
+        CHUNK_SIZE is embedded whole, anything larger goes through chunk_text()
+        and is mean pooled. Only the second route chunks, so the first route's
+        safety rests entirely on CHUNK_SIZE itself being within the embedding
+        model's window — which is what tests/test_chunking.py pins. This asserts
+        the second route: whatever the content type, every string handed to the
+        model is inside the same budget. HTML and Markdown are included because
+        their splitters split on headers, not on a token budget, and depend on a
+        secondary pass to come back under it.
+
+        Requirement 1.4.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from open_notebook.utils.chunking import ContentType
+
+        content_type = (
+            getattr(ContentType, content_type_name) if content_type_name else None
+        )
+
+        # Markdown-flavoured so the header splitters have something to split on,
+        # and long enough that chunking is unavoidable.
+        section = _build_text_exceeding_tokens(
+            "This paragraph carries enough prose to matter. ", CHUNK_SIZE * 2
+        )
+        text = f"# Title\n\n{section}\n\n## Second Section\n\n{section}"
+
+        seen: list[str] = []
+
+        async def _capture(batch):
+            seen.extend(batch)
+            return [[1.0, 0.0, 0.0] for _ in batch]
+
+        mock_model = MagicMock()
+        mock_model.aembed = AsyncMock(side_effect=_capture)
+
+        with patch(
+            "open_notebook.ai.models.model_manager.get_embedding_model",
+            new_callable=AsyncMock,
+            return_value=mock_model,
+        ):
+            result = await generate_embedding(text, content_type=content_type)
+
+        assert len(result) == 3
+        assert len(seen) > 1, "expected the text to be chunked before embedding"
+        oversized = [t for t in seen if token_count(t) > CHUNK_SIZE]
+        assert not oversized, (
+            f"{len(oversized)} of {len(seen)} inputs exceeded CHUNK_SIZE="
+            f"{CHUNK_SIZE} tokens (largest {max(token_count(t) for t in oversized)})"
+        )
+
 
 # ============================================================================
 # TEST SUITE 4: Error Classification for 413

@@ -4,9 +4,15 @@ Unit tests for the open_notebook.utils.chunking module.
 Tests content type detection and text chunking functionality.
 """
 
+import re
+from pathlib import Path
+from typing import Optional
+
 import pytest
+import yaml  # type: ignore[import-untyped]  # transitive dep; stubs not installed
 
 from open_notebook.utils.chunking import (
+    CHUNK_OVERLAP,
     CHUNK_SIZE,
     MIN_CHUNK_SIZE,
     ContentType,
@@ -16,6 +22,26 @@ from open_notebook.utils.chunking import (
     detect_content_type_from_heuristics,
 )
 from open_notebook.utils.token_utils import token_count
+
+# nomic-embed-text accepts 2048 tokens per input. This is a property of the
+# model this deployment embeds with — see the "Embeddings" row in
+# .kiro/specs/eeronotebook-v1/design.md and Requirement 1.4 — and not a limit
+# the application imposes: open_notebook/utils/chunking.py only warns above
+# 8192, four times this window, and clamps nothing. The deployment pins
+# OPEN_NOTEBOOK_CHUNK_SIZE in deploy/.env, and this file is what keeps that pin
+# honest.
+EMBEDDING_MODEL_MAX_INPUT_TOKENS = 2048
+
+# The application's own floor, from chunking._get_chunk_size(). Below this it
+# silently substitutes 100, so a deploy value under it would not be the value in
+# effect.
+CHUNK_SIZE_FLOOR = 100
+
+CHUNK_SIZE_VAR = "OPEN_NOTEBOOK_CHUNK_SIZE"
+DEPLOY_DIR = Path(__file__).parent.parent / "deploy"
+DEPLOY_ENV_EXAMPLE = DEPLOY_DIR / ".env.example"
+DEPLOY_ENV_LIVE = DEPLOY_DIR / ".env"
+DEPLOY_COMPOSE = DEPLOY_DIR / "docker-compose.yml"
 
 
 def _build_text_with_max_tokens(fragment: str, max_tokens: int) -> str:
@@ -41,6 +67,35 @@ def _assert_chunks_within_token_limit(chunks: list[str]) -> None:
     assert chunks
     for chunk in chunks:
         assert token_count(chunk) <= CHUNK_SIZE
+
+
+def _read_env_assignment(path: Path, key: str) -> Optional[str]:
+    """
+    Return the effective value of key in a dotenv-style file.
+
+    Commented lines are ignored and the last assignment wins, which is how the
+    container runtime reads these files.
+    """
+    value: Optional[str] = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, _, raw = stripped.partition("=")
+        if name.strip() == key:
+            value = raw.strip().strip("\"'")
+    return value
+
+
+def _compose_app_environment() -> dict[str, str]:
+    """Read the app service's environment block out of the deployment compose file."""
+    compose = yaml.safe_load(DEPLOY_COMPOSE.read_text(encoding="utf-8"))
+    env = compose["services"]["eeronotebook-app"]["environment"]
+    if isinstance(env, list):
+        # Compose accepts a list of KEY=VALUE strings as well as a mapping.
+        pairs = (item.partition("=") for item in env)
+        return {name.strip(): raw.strip() for name, _, raw in pairs}
+    return {str(k): "" if v is None else str(v) for k, v in env.items()}
 
 # ============================================================================
 # TEST SUITE 1: Content Type Detection from Extension
@@ -351,6 +406,115 @@ Content for section 2.
         chunks = chunk_text(text, content_type=ContentType.PLAIN)
         # The function must always return at least one chunk for non-empty input.
         assert len(chunks) >= 1
+
+
+# ============================================================================
+# TEST SUITE 5: Chunk Size Against the Embedding Model's Input Window
+# ============================================================================
+
+
+class TestChunkSizeWithinEmbeddingWindow:
+    """
+    Requirement 1.4: chunks must not exceed the Embedding_Model's 2048-token
+    input window.
+
+    The application cannot enforce this on its own — the window belongs to the
+    embedding model, not to the chunker, and chunking._get_chunk_size() accepts
+    anything up to 8192 with only a log line. So the constraint lives in
+    deployment configuration, and these tests are what stop that configuration
+    drifting past the window. A chunk over the window is not an error anywhere:
+    the provider truncates it and returns a vector for the part it read, which
+    degrades retrieval silently.
+    """
+
+    def test_resolved_chunk_size_within_window(self):
+        """The chunk size this process resolved must fit the embedder's window."""
+        assert CHUNK_SIZE <= EMBEDDING_MODEL_MAX_INPUT_TOKENS, (
+            f"{CHUNK_SIZE_VAR} resolved to {CHUNK_SIZE} tokens, over "
+            f"nomic-embed-text's {EMBEDDING_MODEL_MAX_INPUT_TOKENS}-token window"
+        )
+
+    def test_overlap_is_carried_inside_the_chunk_budget(self):
+        """
+        Overlap must stay below the chunk size, which is what makes the window
+        bound above sufficient: the splitter counts overlap inside chunk_size
+        rather than adding it on top.
+        """
+        assert 0 <= CHUNK_OVERLAP < CHUNK_SIZE
+
+    def test_deploy_template_pins_chunk_size_within_window(self):
+        """
+        deploy/.env.example is the committed template every deployment is copied
+        from, so the pin has to be present and in range there.
+        """
+        raw = _read_env_assignment(DEPLOY_ENV_EXAMPLE, CHUNK_SIZE_VAR)
+        assert raw is not None, (
+            f"{CHUNK_SIZE_VAR} is not set in {DEPLOY_ENV_EXAMPLE.name}; the "
+            f"application default would apply, and nothing holds it to the "
+            f"embedder's window"
+        )
+        assert raw.isdigit(), f"{CHUNK_SIZE_VAR}={raw!r} is not an integer"
+        pinned = int(raw)
+        assert CHUNK_SIZE_FLOOR <= pinned <= EMBEDDING_MODEL_MAX_INPUT_TOKENS, (
+            f"{DEPLOY_ENV_EXAMPLE.name} pins {CHUNK_SIZE_VAR}={pinned}, outside "
+            f"the usable range {CHUNK_SIZE_FLOOR}–"
+            f"{EMBEDDING_MODEL_MAX_INPUT_TOKENS} tokens"
+        )
+
+    def test_live_deploy_env_pins_chunk_size_within_window(self):
+        """
+        The same check against the live deploy/.env when one is present. It is
+        gitignored and host-local, so this skips off the Dev Server rather than
+        failing.
+        """
+        if not DEPLOY_ENV_LIVE.exists():
+            pytest.skip(f"{DEPLOY_ENV_LIVE} is host-local and gitignored")
+        raw = _read_env_assignment(DEPLOY_ENV_LIVE, CHUNK_SIZE_VAR)
+        assert raw is not None, f"{CHUNK_SIZE_VAR} is not set in deploy/.env"
+        assert raw.isdigit(), f"{CHUNK_SIZE_VAR}={raw!r} is not an integer"
+        assert CHUNK_SIZE_FLOOR <= int(raw) <= EMBEDDING_MODEL_MAX_INPUT_TOKENS
+
+    def test_compose_forwards_chunk_size_into_the_app_container(self):
+        """
+        Compose reads deploy/.env for interpolation only — it does not inject it
+        into containers. Without this passthrough the pin is inert, and the
+        symptom would be an environment file that looks correct while the
+        application runs on its default.
+        """
+        env = _compose_app_environment()
+        assert CHUNK_SIZE_VAR in env, (
+            f"deploy/docker-compose.yml does not pass {CHUNK_SIZE_VAR} to "
+            f"eeronotebook-app, so setting it in deploy/.env has no effect"
+        )
+        spec = env[CHUNK_SIZE_VAR]
+        assert CHUNK_SIZE_VAR in spec, (
+            f"{CHUNK_SIZE_VAR} should be interpolated from the environment, not "
+            f"hardcoded in compose as {spec!r}"
+        )
+        # A compose-level fallback applies whenever the variable is absent from
+        # .env, so it is a configured chunk size too and has to be in range.
+        fallback = re.search(r":-\s*(\d+)\s*}", spec)
+        assert fallback is not None, (
+            f"{CHUNK_SIZE_VAR} has no compose fallback; an unset variable would "
+            f"leave the application on its own default"
+        )
+        assert (
+            CHUNK_SIZE_FLOOR
+            <= int(fallback.group(1))
+            <= EMBEDDING_MODEL_MAX_INPUT_TOKENS
+        )
+
+    def test_chunks_stay_within_the_window_at_the_pinned_size(self):
+        """
+        End of the chain: text well over the budget still yields chunks the
+        embedder can accept whole. Guards the window rather than CHUNK_SIZE, so
+        it stays meaningful if the pin is raised.
+        """
+        text = _build_text_exceeding_tokens("This is a sentence. ", CHUNK_SIZE * 3)
+        chunks = chunk_text(text, content_type=ContentType.PLAIN)
+        assert len(chunks) > 1
+        for chunk in chunks:
+            assert token_count(chunk) <= EMBEDDING_MODEL_MAX_INPUT_TOKENS
 
 
 if __name__ == "__main__":
