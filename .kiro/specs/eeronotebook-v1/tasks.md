@@ -151,14 +151,19 @@ Models are already installed: `qwen2.5:14b` and `nomic-embed-text` were pulled d
     - Nothing consumes this yet, by design: the application has no auth environment and no `depends_on` for it, verified by inspection, and stayed healthy throughout. Adding the dependency before anything reads it would only mean the app could not start when GoTrue could not
     - **`auth_db_data` is not covered by `deploy/backup/`,** which predates this service and captures `db_data` and `app_data` only. Losing that volume loses every member account, and task 5.3 makes GoTrue the only way in — so backup coverage is owed before then, not after
     - _Requirements: 4.1, 13.2, 13.9_
-  - [~] 5.2 Build the Identity_Boundary
-    - One internal seam that resolves a request to an authenticated member; provider-specific token verification lives only there
-    - No route outside the seam may reference GoTrue directly
-    - New package `open_notebook/identity/`: verify the token, resolve it to a member, raise `AuthenticationError` when it cannot, so the existing handler returns 401 rather than a bare `HTTPException`
-    - Expose exactly one FastAPI dependency for routers to depend on; nothing else in the seam is public
-    - Persist a `member` record keyed on the provider's subject claim, so application data references a local id and not a provider id — this is what makes Requirement 4.4 achievable rather than aspirational
-    - Cache verification material rather than fetching it per request, and keep the whole path async
-    - Add a test asserting no module outside `open_notebook/identity/` imports a GoTrue client or reads a GoTrue environment variable; the seam is only real if something enforces it
+  - [x] 5.2 Build the Identity_Boundary
+    - `open_notebook/identity/` holds the `IdentityProvider` protocol, the GoTrue implementation, and one FastAPI dependency. A route depends on `current_member` and receives a `Member` — never a token, a claim set, or a provider name
+    - HS256 verification with the secret read once at construction: GoTrue signs symmetrically, so there is no key material to fetch per request and nothing to refresh. A provider publishing a JWKS would cache differently behind the same protocol
+    - Audience is always checked; **issuer only when one is expected**, because GoTrue omits `iss` unless configured and verifying an absent claim would reject every valid token. Both are tested
+    - `open_notebook/domain/member.py` is the local identity everything else references, so application data carries a member id and never a provider's user id (Requirement 4.4). Provider-agnostic in prose as well as in code, and a test asserts the module names no provider — it caught the first draft, whose own docstring named GoTrue
+    - **Migration 24 defines `member` with a UNIQUE index on (provider, subject), and that index is the concurrency guarantee, not the application code.** `Member.resolve` reads then writes, which is racy by construction; the index means the loser's insert fails and it re-reads, instead of both succeeding and leaving one person with two identities and two sets of Notebooks
+    - Verified on a scratch SurrealDB on `--network none` before going near live data: the duplicate is refused with `already contains ['p', 's1']` and the count stays at 1, a different subject is accepted, the ASSERT refuses an empty subject, and the down path removes the table. Corrected an assumption while there — `SCHEMAFULL` **drops** an unknown field rather than rejecting the write, so it prevents field creation and the ASSERTs are what refuse bad values
+    - `current_member` raises `AuthenticationError` and never returns `None`. 401 means "you are nobody" and an empty list means "you own nothing"; conflating them is how an access check passes while enforcing nothing. Task 6.2 depends on that distinction holding
+    - Boundary enforced by test, not convention: `tests/test_identity_boundary.py` reads `open_notebook/`, `api/` and `commands/` and fails if any module outside the package imports a JWT library or reads a `GOTRUE_` variable. It also asserts the search found something, so it cannot pass vacuously. A stub provider satisfying the protocol resolves through the same seam untouched, which is the only mechanical check of Requirement 4.4 available
+    - `pyjwt` is now declared in `pyproject.toml`. It was already installed transitively, which works until the parent that pulls it changes
+    - **Migration numbering shifted:** the plan reserved 24 for 6.1, but 5.2 lands first and migrations are sequential, so owner scope becomes 25
+    - Deployed and verified on the Dev Server: a backup was taken first, the live database moved 23 → 24 on API startup, `member` is queryable, all five containers healthy, API `/health` 200. 676 tests pass, `ruff` and `mypy` clean
+    - **Task 2.4's embed-failure fix is now deployed** as a side effect — the host checkout had been pinned behind it, and this is the first deployment past that commit. Confirmed present in the running image
     - _Requirements: 4.2, 4.3, 4.4_
   - [~] 5.3 Replace the shared password
     - Move the application from single-password access to authenticated sessions
@@ -176,9 +181,11 @@ Models are already installed: `qwen2.5:14b` and `nomic-embed-text` were pulled d
     - Every new string through `t('...')`, with keys added to all locales under `frontend/src/lib/locales/`; en-US is the reference and a missing key fails `tsc`
     - `npm run lint`, `npm run test`, `npm run build`
     - _Requirements: 4.1, 4.5_
-  - [ ]* 5.5 Test the Identity_Boundary
-    - A valid token resolves to a member; expired, malformed, wrong-issuer, wrong-audience and absent tokens each return 401
-    - A second provider stub satisfying the same seam passes the same tests unchanged, which is the only honest check of Requirement 4.4
+  - [x]* 5.5 Test the Identity_Boundary
+    - Delivered with 5.2 rather than after it: `tests/test_identity_boundary.py` covers a valid token resolving to a member, and expired, wrong-signature, malformed, wrong-audience, wrong-issuer, missing-subject, `alg: none` and absent tokens each refused. All raise `AuthenticationError`, which `api/main.py`'s existing handler answers as 401
+    - A stub provider satisfying the protocol resolves through the same seam with no change to the seam, and `IdentityProvider` is `runtime_checkable` so that is asserted mechanically rather than by inspection
+    - A missing secret raises `ConfigurationError`, not `AuthenticationError`: nobody's credentials are wrong, the deployment is, and failing loudly beats verifying every token against an empty key
+    - 18 tests. Optional in the plan, written anyway — the boundary's whole value is that it refuses things, and an unrefused token is invisible until it matters
     - _Requirements: 4.2, 4.3, 4.4, 4.5_
   - [ ] 5.6 Checkpoint — identity
     - Ensure all tests pass, ask the user if questions arise.
@@ -188,7 +195,8 @@ Models are already installed: `qwen2.5:14b` and `nomic-embed-text` were pulled d
   - [~] 6.1 Add owner scope to the data model
     - Owner reference on Notebooks; Sources, notes, and Study_Artifacts inherit Notebook access
     - Migrate content created during tasks 3–4 to a named Notebook owner rather than leaving it unscoped
-    - Migration `24.surrealql` plus `24_down.surrealql`, and the matching entry in `AsyncMigrationManager` — migrations are hard-coded, not discovered, so a new file alone does nothing
+    - Migration `25.surrealql` plus `25_down.surrealql`, and the matching entry in `AsyncMigrationManager` — migrations are hard-coded, not discovered, so a new file alone does nothing. **Renumbered from 24:** task 5.2 took 24 for the `member` table, and migrations are sequential
+    - Owner is a `record<member>` reference, so ownership points at the local identity from 5.2 and never at a provider's user id
     - Add `owner` to the `Notebook` model in `open_notebook/domain/notebook.py`; Sources, notes and Study_Artifacts carry no owner of their own and inherit through the existing `reference` and `artifact` relations
     - Define the `share` relation in the same migration, so 6.2 can enforce owner-or-Share from the outset instead of being rewritten by 6.3
     - The migration must leave both an empty database and the populated one on the Dev Server valid; the up path runs automatically on API startup, so a failure there stops the app
