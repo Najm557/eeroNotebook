@@ -174,14 +174,17 @@ Models are already installed: `qwen2.5:14b` and `nomic-embed-text` were pulled d
     - Deployed and verified on the Dev Server: a backup was taken first, the live database moved 23 → 24 on API startup, `member` is queryable, all five containers healthy, API `/health` 200. 676 tests pass, `ruff` and `mypy` clean
     - **Task 2.4's embed-failure fix is now deployed** as a side effect — the host checkout had been pinned behind it, and this is the first deployment past that commit. Confirmed present in the running image
     - _Requirements: 4.2, 4.3, 4.4_
-  - [~] 5.3 Replace the shared password
-    - Move the application from single-password access to authenticated sessions
-    - Decide the fate of `OPEN_NOTEBOOK_PASSWORD`: remove it, or retain it as an outer gate
-    - Replace `PasswordAuthMiddleware` in `api/main.py` with the boundary's dependency, and retire `api/auth.py` with it
-    - Keep `/`, `/health`, `/docs`, `/openapi.json`, `/redoc`, `/api/config` and the login route unauthenticated, matching the current `excluded_paths` exactly — anything else silently loses or gains protection
-    - `GET /api/auth/status` reports whether a password is set; change it to report how to authenticate, since the frontend reads it on load
-    - If `OPEN_NOTEBOOK_PASSWORD` is retained as an outer gate, no route may treat it as sufficient on its own
-    - An unresolvable request returns 401, never an empty result set
+  - [x] 5.3 Replace the shared password
+    - `MemberAuthMiddleware` resolves every request to a member or refuses it. `api/auth.py` and `PasswordAuthMiddleware` are deleted
+    - A middleware rather than a global dependency, because it must refuse *before* routing. Division of labour is deliberate: the middleware answers who is calling, and routes answer what that member may reach by depending on `current_member` (task 6.2). `current_member` reuses what the middleware resolved, so a route and the gate can never disagree about the caller
+    - **The admin password resolves to a member rather than bypassing resolution** (operator's decision). It maps to one `admin-password`/`operator` member, so task 6.2's ownership checks apply to the operator exactly as to anyone else — a credential that skipped resolution would skip every check built on it. Compared in constant time, as upstream did
+    - **Authentication now fails closed.** Upstream skipped it entirely when no password was configured, so a deployment that forgot to set one served every notebook to anyone. There is deliberately no environment variable restoring that
+    - The suite's several hundred route tests assert routing, not authentication, and would otherwise all assert 401. The only bypass lives in `tests/conftest.py` and requires running pytest; tests that must see the real gate opt out with `@pytest.mark.no_auth_bypass`. `tests/test_member_auth_middleware.py` adds 13 covering refusals, the fail-closed case, admin resolution, and the exclusion list
+    - Exclusion list is upstream's verbatim and pinned by a test: `/api/config` and `/api/auth/status` are read by the frontend before sign-in, and the documentation routes are how an operator inspects a deployment that is refusing their credentials
+    - A failed identity-store read answers **503**, never an empty list. "The database is down" must not look like "this member owns nothing", which is the shape that silently passes an access check
+    - `GET /api/auth/status` now reports how to authenticate rather than whether a password is set. Exposes no secret: the method, that signup is closed, and whether an operator credential exists
+    - Verified on the deployment: `/health`, `/api/config`, `/api/auth/status` answer 200 unauthenticated; `/api/notebooks` gives 401 with no header, with a bad token, and with a `Basic` scheme; 200 with the admin password and 200 with a real member token. Both identities exist as `member` rows — `admin-password/operator` and `gotrue/<uuid>`. 707 tests, `ruff` and `mypy` clean
+    - **Found for 5.4:** `auth_url` currently reports `http://eeronotebook-auth:9999`, which no browser can reach — GoTrue is unpublished by design (Requirement 13.2). Sign-in must therefore be proxied by the app (`POST /api/auth/login` calling GoTrue server-side and returning the token) rather than the browser talking to GoTrue directly. Publishing GoTrue instead would trade a requirement away for convenience
     - _Requirements: 4.1, 4.5_
   - [ ] 5.4 Move the frontend onto member sessions
     - Rewrite `frontend/src/app/(auth)/login/` to authenticate a member instead of posting a shared password
