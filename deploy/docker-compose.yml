@@ -98,6 +98,113 @@ services:
       - "dozzle.enable=true"
       - "dozzle.group=eeronotebook"
 
+  # ─── Identity: database ─────────────────────────────────────────────────────
+  # GoTrue's own store, deliberately separate from lh-auth's: a compromise or
+  # migration in legendary-hunts must not reach eeroNotebook (ADR 0003).
+  # Unpublished, and on the internal network only — nothing outside this stack
+  # has any reason to reach it.
+  eeronotebook-authdb:
+    image: postgres:16-alpine
+    container_name: eeronotebook-authdb
+    environment:
+      POSTGRES_USER: ${AUTH_DB_USER:-eeronotebook_auth}
+      POSTGRES_DB: ${AUTH_DB_NAME:-eeronotebook_auth}
+      POSTGRES_PASSWORD: ${AUTH_DB_PASSWORD:?AUTH_DB_PASSWORD must be set}
+    volumes:
+      - auth_db_data:/var/lib/postgresql/data
+    networks:
+      - eeronotebook_internal
+    restart: unless-stopped
+    healthcheck:
+      # pg_isready ships with this image. Named user and database, because the
+      # default probe checks the "postgres" database, which is not the one
+      # GoTrue uses.
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    labels:
+      - "dozzle.enable=true"
+      - "dozzle.group=eeronotebook"
+
+  # ─── Identity: GoTrue ───────────────────────────────────────────────────────
+  # Authenticates members and issues JWTs. The application does not consume this
+  # directly — a single internal boundary resolves a request to a member, so the
+  # provider can be replaced without touching routes (ADR 0003, task 5.2).
+  #
+  # Same image and version as lh-auth: proven on this host, and a version this
+  # team already operates. Unpublished; reached by container name.
+  eeronotebook-auth:
+    image: public.ecr.aws/supabase/gotrue:v2.188.1
+    container_name: eeronotebook-auth
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: "9999"
+
+      GOTRUE_DB_DRIVER: postgres
+      # Password is hex, so it needs no URL-escaping here. See .env.example.
+      GOTRUE_DB_DATABASE_URL: postgres://${AUTH_DB_USER:-eeronotebook_auth}:${AUTH_DB_PASSWORD}@eeronotebook-authdb:5432/${AUTH_DB_NAME:-eeronotebook_auth}?sslmode=disable
+      GOTRUE_DB_NAMESPACE: auth
+
+      # The TLS origin from task 4.1. Used in links and as the default redirect
+      # target; an empty allow list means no other redirect target is accepted.
+      GOTRUE_SITE_URL: https://${EERONOTEBOOK_DOMAIN:-eeronotebook.local}
+      GOTRUE_URI_ALLOW_LIST: ""
+
+      # Members are created by the operator. This is a small team, and an open
+      # registration endpoint on a study tool holding course material is a
+      # liability with no upside (Requirement 4.1).
+      GOTRUE_DISABLE_SIGNUP: "true"
+
+      GOTRUE_JWT_SECRET: ${GOTRUE_JWT_SECRET:?GOTRUE_JWT_SECRET must be set}
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      # Short-lived access tokens with rotating refresh tokens. The shared
+      # password this replaces never expired at all.
+      GOTRUE_JWT_EXP: "3600"
+      GOTRUE_SECURITY_REFRESH_TOKEN_ROTATION_ENABLED: "true"
+      GOTRUE_SECURITY_REFRESH_TOKEN_REUSE_INTERVAL: "10"
+
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
+      # No SMTP is configured on this host, so a member who had to confirm by
+      # email could never sign in. Operator-created accounts are confirmed on
+      # creation instead. Revisit if self-service signup is ever enabled.
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_SMS_AUTOCONFIRM: "true"
+
+      # Deliberately higher than lh-auth's 6: that value is tuned for a
+      # different application, and this one holds a team's study material.
+      GOTRUE_PASSWORD_MIN_LENGTH: "12"
+
+      GOTRUE_LOG_LEVEL: info
+    depends_on:
+      eeronotebook-authdb:
+        condition: service_healthy
+    networks:
+      - eeronotebook_internal
+    restart: unless-stopped
+    healthcheck:
+      # This image ships no curl — checked before writing the probe, because a
+      # curl-based healthcheck on the gateway held the whole stack down in task
+      # 2.2. wget and nc are both present; wget is the closer equivalent.
+      test:
+        - "CMD"
+        - "wget"
+        - "--spider"
+        - "-q"
+        - "http://localhost:9999/health"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "dozzle.enable=true"
+      - "dozzle.group=eeronotebook"
+
   # ─── Application ────────────────────────────────────────────────────────────
   # Built from this fork rather than pulled, so the image always matches the
   # branch. The image runs api, worker and frontend under supervisord; the
@@ -182,3 +289,8 @@ volumes:
   # enough to matter for a database.
   db_data:
   app_data:
+  # GoTrue's store. Not covered by deploy/backup/ yet — that script predates
+  # this service and captures db_data and app_data only. Losing this volume
+  # loses every member account, so backup coverage is owed before task 5.3
+  # makes it the only way in.
+  auth_db_data:
