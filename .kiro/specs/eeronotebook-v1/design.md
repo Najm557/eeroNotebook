@@ -122,7 +122,8 @@ Ownership and access rules:
 - Access for anyone else exists only as an explicit grant to a named user, revocable at any time.
 - A viewer may read sources and ask grounded questions; a viewer may not alter the notebook.
 - Sources, notes, and generated artifacts inherit the access of their notebook.
-- Study progress is owned by the individual, never by the notebook.
+- Study progress is owned by the individual, never by the notebook. Quiz attempts are additionally readable by the notebook's owner; flashcard review state is not.
+- The shared instance password resolves to a single **admin member**, rather than bypassing member resolution. Every access check then runs the same way for the admin as for anyone else, and the admin is a real owner that pre-existing content can be assigned to.
 
 ### Data model additions
 
@@ -135,6 +136,14 @@ Upstream's domain objects gain an owner scope; three concerns are new:
 | Study progress | Per user, per artifact: flashcard scheduling state, quiz attempts and scores |
 
 Study progress is deliberately separate from artifacts so that revoking access does not destroy a person's history, and so a shared deck carries no shared state.
+
+### Regeneration without losing history
+
+Regenerating an artifact after its sources change must not silently discard what members have already done, and must not leave schedules attached to material that no longer exists. Two mechanisms, chosen because they make the good outcome automatic rather than requiring a reconciliation step:
+
+**Flashcard progress is content-addressed.** A member's review state is keyed to a stable hash of the card's own content, not to a positional id. A card that survives regeneration keeps its history because it hashes the same; a card whose wording changed is a different card with fresh history, which is honest — the thing being recalled changed. History belonging to cards that have disappeared stays in place, unreferenced and harmless, and can be reported to the member rather than deleted on their behalf.
+
+**Artifacts are versioned rather than mutated.** Regeneration writes a new version and records the source set it came from. A quiz attempt references the version it was taken against, so an owner reviewing a member's answers sees the questions that member actually faced, not the questions the quiz asks today. Without this, instructor review silently misrepresents what happened.
 
 ### Study artifacts
 
@@ -168,7 +177,7 @@ Decided by recommendation and consciously not debated. Each is revisitable.
 
 - DNS hostname in place of an address variable, once internal DNS is confirmed.
 - `viewer` as the role label, presented as "student" in classroom UI if wanted.
-- No instructor visibility of student scores; progress is private.
+- Quiz attempts are visible to the Notebook owner, so an instructor can assist. Visibility runs upward only — never between Viewers — and flashcard review state stays private even from the owner. Members are told before they attempt.
 - TLS via a private CA, which client devices must trust.
 - Monitoring beyond an Uptime Kuma check and Dozzle logs.
 - Podcasts and TTS. Piper is already on this host over gRPC `:50053` when wanted.

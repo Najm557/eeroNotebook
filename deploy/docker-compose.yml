@@ -103,28 +103,34 @@ services:
   # migration in legendary-hunts must not reach eeroNotebook (ADR 0003).
   # Unpublished, and on the internal network only — nothing outside this stack
   # has any reason to reach it.
+  # Supabase's own Postgres, not a plain one. GoTrue's migrations assume a great
+  # deal that upstream Postgres does not provide — the auth schema, Supabase's
+  # role set, a search_path, and enum types its later migrations expect. Supplying
+  # those one at a time took four attempts and each fix revealed the next, so this
+  # mirrors the pairing already working on this host in lh-db/lh-auth instead.
+  # Heavier image, no bespoke bootstrap, and the combination is the one GoTrue is
+  # actually developed against.
   eeronotebook-authdb:
-    image: postgres:16-alpine
+    image: public.ecr.aws/supabase/postgres:17.6.1.084
     container_name: eeronotebook-authdb
     environment:
-      POSTGRES_USER: ${AUTH_DB_USER:-eeronotebook_auth}
-      POSTGRES_DB: ${AUTH_DB_NAME:-eeronotebook_auth}
+      # supabase_admin, matching lh-db. In this image `postgres` is NOT the
+      # superuser — Supabase reserves that for supabase_admin — so POSTGRES_USER
+      # decides which role receives POSTGRES_PASSWORD *and* whether that role can
+      # write to the auth schema at all. Left at the default, GoTrue connects
+      # successfully and then fails with `permission denied for schema auth`.
+      POSTGRES_USER: supabase_admin
+      POSTGRES_DB: postgres
       POSTGRES_PASSWORD: ${AUTH_DB_PASSWORD:?AUTH_DB_PASSWORD must be set}
     volumes:
       - auth_db_data:/var/lib/postgresql/data
-      # Creates the auth schema GoTrue's first migration assumes already exists.
-      # Runs only on an empty data volume. See the file for why it is needed.
-      - ./auth-db-init:/docker-entrypoint-initdb.d:ro
     networks:
       - eeronotebook_internal
     restart: unless-stopped
     healthcheck:
-      # pg_isready ships with this image. Named user and database, because the
-      # default probe checks the "postgres" database, which is not the one
-      # GoTrue uses.
       test:
         - "CMD-SHELL"
-        - "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"
+        - "pg_isready -U supabase_admin -d postgres"
       interval: 15s
       timeout: 5s
       retries: 5
@@ -157,9 +163,19 @@ services:
       API_EXTERNAL_URL: http://eeronotebook-auth:9999
 
       GOTRUE_DB_DRIVER: postgres
-      # Password is hex, so it needs no URL-escaping here. See .env.example.
-      GOTRUE_DB_DATABASE_URL: postgres://${AUTH_DB_USER:-eeronotebook_auth}:${AUTH_DB_PASSWORD}@eeronotebook-authdb:5432/${AUTH_DB_NAME:-eeronotebook_auth}?sslmode=disable
-      GOTRUE_DB_NAMESPACE: auth
+      # supabase_admin, the role POSTGRES_USER above provisions with our password
+      # and the only one able to write the auth schema this image ships.
+      #
+      # Two things made the alternatives look plausible and fail. Only
+      # POSTGRES_USER receives POSTGRES_PASSWORD, so supabase_auth_admin cannot
+      # authenticate over the network at all. And `postgres` authenticates but is
+      # not a superuser here, so it gets `permission denied for schema auth`.
+      #
+      # A password test from inside the container proves nothing either way: this
+      # image's pg_hba trusts 127.0.0.1 unconditionally, so local psql succeeds
+      # without checking a password while GoTrue, arriving over the network, meets
+      # scram-sha-256.
+      GOTRUE_DB_DATABASE_URL: postgresql://supabase_admin:${AUTH_DB_PASSWORD}@eeronotebook-authdb:5432/postgres
 
       # The TLS origin from task 4.1. Used in links and as the default redirect
       # target; an empty allow list means no other redirect target is accepted.
@@ -174,6 +190,12 @@ services:
       GOTRUE_JWT_SECRET: ${GOTRUE_JWT_SECRET:?GOTRUE_JWT_SECRET must be set}
       GOTRUE_JWT_AUD: authenticated
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+
+      # Which `role` claim the admin API accepts. Required, and easy to miss:
+      # without it GoTrue recognises no admin at all, so with sign-up disabled
+      # there is no way to create a member and nobody can ever sign in. Found by
+      # trying to create one and getting 401.
+      GOTRUE_JWT_ADMIN_ROLES: service_role
       # Short-lived access tokens with rotating refresh tokens. The shared
       # password this replaces never expired at all.
       GOTRUE_JWT_EXP: "3600"
@@ -256,9 +278,21 @@ services:
       # take effect.
       OPEN_NOTEBOOK_CHUNK_SIZE: ${OPEN_NOTEBOOK_CHUNK_SIZE:-400}
 
-      # Interim gate until per-user identity lands (spec task 5.3). Upstream's
-      # auth is a single shared password, which is not the end state.
+      # Admin credential. Per the operator's decision it stays as an admin
+      # identity alongside per-member accounts, rather than being removed: it
+      # resolves to a single admin member so that access checks run the same way
+      # for it as for anyone else (spec task 5.3).
       OPEN_NOTEBOOK_PASSWORD: ${OPEN_NOTEBOOK_PASSWORD:?OPEN_NOTEBOOK_PASSWORD must be set}
+
+      # The identity boundary verifies member tokens in this process, so it needs
+      # the same signing secret GoTrue uses. Read only inside
+      # open_notebook/identity/ — a test fails if anything else touches it.
+      GOTRUE_JWT_SECRET: ${GOTRUE_JWT_SECRET:?GOTRUE_JWT_SECRET must be set}
+      GOTRUE_JWT_AUD: authenticated
+
+      # Where the frontend sends members to sign in and refresh. Reached by
+      # container name; GoTrue is not published to the host.
+      EERONOTEBOOK_AUTH_URL: http://eeronotebook-auth:9999
 
       # The HTTPS origin the browser is told to call the API on. Left unset,
       # upstream derives it from the request as https://<host>:5055 — a port

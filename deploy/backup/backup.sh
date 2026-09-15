@@ -66,6 +66,15 @@ DB_CONTAINER="${DB_CONTAINER:-eeronotebook-db}"
 DB_VOLUME="${DB_VOLUME:-eeronotebook_db_data}"
 APP_VOLUME="${APP_VOLUME:-eeronotebook_app_data}"
 
+# GoTrue's store. Its credentials come from the same .env the stack runs on, so a
+# password rotation cannot leave the backup authenticating with a stale one.
+AUTH_DB_CONTAINER="${AUTH_DB_CONTAINER:-eeronotebook-authdb}"
+AUTH_DB_USER="${AUTH_DB_USER:-supabase_admin}"
+AUTH_DB_NAME="${AUTH_DB_NAME:-postgres}"
+# Only the auth schema. The database is Supabase's own image, which carries other
+# schemas this stack neither uses nor should restore over.
+AUTH_DB_SCHEMA="${AUTH_DB_SCHEMA:-auth}"
+
 # launchd gives a job almost no PATH, and OrbStack's docker is not in it.
 DOCKER="${DOCKER:-}"
 if [ -z "$DOCKER" ]; then
@@ -172,6 +181,51 @@ tar tzf "$RUN_DIR/app_data.tar.gz.part" >/dev/null || fail "app_data archive doe
 mv "$RUN_DIR/app_data.tar.gz.part" "$RUN_DIR/app_data.tar.gz"
 log "  ✓ app_data.tar.gz ($(du -h "$RUN_DIR/app_data.tar.gz" | cut -f1))"
 
+# ─── 2b. Identity database: hot logical dump ──────────────────────────────────
+# GoTrue's Postgres holds every member account. Without this, losing that volume
+# locks the whole team out of a stack where member accounts are the only way in.
+#
+# One artifact rather than two, unlike the SurrealDB pair above, and deliberately:
+# pg_dump runs in a single transaction and is the restore path of record for
+# Postgres, whereas a data-directory copy is locked to the server's major version
+# and is unsafe taken hot. Stopping the auth container to tar it would buy nothing
+# that pg_dump does not already give.
+#
+# Skipped rather than fatal when the container is absent, so this script still
+# works against a stack deployed before identity existed.
+if "$DOCKER" inspect "$AUTH_DB_CONTAINER" >/dev/null 2>&1; then
+  log "dumping $AUTH_DB_CONTAINER ($AUTH_DB_NAME, schema $AUTH_DB_SCHEMA)"
+  # PGPASSWORD is required even over the container's own socket: this image's
+  # pg_hba does not trust supabase_admin locally, and without it pg_dump prompts,
+  # writes nothing, and exits in a way that looks like an empty database rather
+  # than a refused connection.
+  "$DOCKER" exec -e PGPASSWORD="$AUTH_DB_PASSWORD" "$AUTH_DB_CONTAINER" pg_dump \
+    --username "$AUTH_DB_USER" --dbname "$AUTH_DB_NAME" \
+    --schema "$AUTH_DB_SCHEMA" \
+    --clean --if-exists --no-owner --no-privileges \
+    > "$RUN_DIR/auth_db.sql.part" \
+    || fail "pg_dump of $AUTH_DB_NAME schema $AUTH_DB_SCHEMA"
+
+  # An empty dump would restore silently and lock everyone out, so refuse it here.
+  [ -s "$RUN_DIR/auth_db.sql.part" ] || fail "auth dump is empty"
+
+  # Prove it captured the schema GoTrue actually uses, not an empty database that
+  # would restore silently and lock everyone out.
+  grep -q 'CREATE SCHEMA auth' "$RUN_DIR/auth_db.sql.part" \
+    || grep -q 'auth\.users' "$RUN_DIR/auth_db.sql.part" \
+    || fail "auth dump contains no auth schema — wrong database?"
+
+  mv "$RUN_DIR/auth_db.sql.part" "$RUN_DIR/auth_db.sql"
+  gzip -9 "$RUN_DIR/auth_db.sql"
+  AUTH_MEMBERS="$("$DOCKER" exec -e PGPASSWORD="$AUTH_DB_PASSWORD" "$AUTH_DB_CONTAINER" \
+    psql -U "$AUTH_DB_USER" -d "$AUTH_DB_NAME" -tAc \
+    'SELECT count(*) FROM auth.users;' 2>/dev/null | tr -d ' \r')"
+  log "  ✓ auth_db.sql.gz ($(du -h "$RUN_DIR/auth_db.sql.gz" | cut -f1), ${AUTH_MEMBERS:-?} members)"
+else
+  log "  – $AUTH_DB_CONTAINER absent, skipping identity dump"
+  AUTH_MEMBERS="n/a"
+fi
+
 # ─── 3. Database: cold, byte-exact copy of the volume ─────────────────────────
 # Last, so that if this step fails the logical export is already safely written.
 SURREAL_VERSION="$("$DOCKER" exec "$DB_CONTAINER" /surreal version 2>/dev/null | head -1)"
@@ -208,9 +262,14 @@ KEY_FP="$(printf '%s' "${OPEN_NOTEBOOK_ENCRYPTION_KEY:-}" | shasum -a 256 | cut 
   echo "surrealdb:         $SURREAL_VERSION"
   echo "db_volume:         $DB_VOLUME"
   echo "app_volume:        $APP_VOLUME"
+  echo "auth_database:     $AUTH_DB_NAME"
+  # Recorded because a restore that produces the wrong number of accounts should
+  # be obvious from the manifest rather than discovered by someone unable to sign in.
+  echo "auth_members:      ${AUTH_MEMBERS:-n/a}"
   echo "encryption_key_fp: $KEY_FP"
   echo ""
-  ( cd "$RUN_DIR" && shasum -a 256 db_data.tar.gz database.surql.gz app_data.tar.gz )
+  ( cd "$RUN_DIR" && shasum -a 256 db_data.tar.gz database.surql.gz app_data.tar.gz \
+      $( [ -f "$RUN_DIR/auth_db.sql.gz" ] && echo auth_db.sql.gz ) )
 } > "$RUN_DIR/MANIFEST"
 
 chmod 600 "$RUN_DIR"/*

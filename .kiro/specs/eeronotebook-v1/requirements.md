@@ -140,6 +140,8 @@ Domain terms — **eeroNotebook**, **Dev Server**, **Host Ollama**, **Notebook o
 2. THE eeroNotebook SHALL schedule each card for review per member according to that member's own recall history
 3. THE eeroNotebook SHALL maintain Study_Progress for flashcards separately for each member, including on a shared Notebook
 4. THE eeroNotebook SHALL NOT allow one member's review activity to alter the schedule presented to another member
+5. THE eeroNotebook SHALL keep flashcard review state private to the member who owns it, including from the Notebook owner. Unlike a quiz attempt, a review schedule is a study habit rather than an assessment result, and an instructor does not need it to assist
+6. WHEN a deck is regenerated, THE eeroNotebook SHALL preserve a member's review history for every card whose content is unchanged, and SHALL NOT present a schedule for a card that no longer exists
 
 ### Requirement 10: Quizzes
 
@@ -151,6 +153,10 @@ Domain terms — **eeroNotebook**, **Dev Server**, **Host Ollama**, **Notebook o
 2. WHEN a member completes a quiz attempt, THE eeroNotebook SHALL record that attempt and its score as that member's Study_Progress
 3. THE eeroNotebook SHALL present a member's own attempt history to that member
 4. THE eeroNotebook SHALL retain a member's quiz Study_Progress when a Share granting access to the Notebook is revoked
+5. THE eeroNotebook SHALL present every quiz attempt made on a Notebook to that Notebook owner, identifying the member who made it, so that an instructor can see where a learner is struggling and assist
+6. THE eeroNotebook SHALL NOT present one member's attempts to any other Viewer of the Notebook — visibility runs to the owner only, never sideways between learners
+7. THE eeroNotebook SHALL tell a member that their attempts on a Notebook are visible to its owner, before they begin an attempt
+8. WHEN a quiz is regenerated, THE eeroNotebook SHALL keep each existing attempt bound to the quiz as it was when that attempt was made, so that an owner reviewing it sees the questions the member actually answered
 
 ### Requirement 11: Mind Maps
 
@@ -206,7 +212,9 @@ Deliberately excluded from v1, recorded so their absence reads as a decision rat
 
 - **Podcasts and Audio Overviews.** The only capability that would have required egress. Local text-to-speech already exists on the Dev Server for a later pass.
 - **Video overviews, infographics, and slide export.**
-- **Instructor visibility of member scores.** Study_Progress is private to each member. Making it reportable is a materially different design and is cheaper to add deliberately than to retrofit.
+- **Peer visibility of scores.** A Viewer never sees another Viewer's attempts. Visibility runs to the Notebook owner and no further, per Requirement 10 — instructor assistance follows from the classroom use case, classmate comparison does not.
+- **Instructor visibility of flashcard review state.** Only assessment results travel upward. A review schedule says when someone chose to study, which an instructor does not need in order to help.
+- **Aggregate reporting across members.** No endpoint returns a class average or a leaderboard. In a group of two an average identifies both, and the owner can already see individual attempts.
 - **Roles beyond Notebook owner and Viewer.** No editor role, no per-Notebook role matrix.
 - **Team-wide notebook libraries.** Access is granted per person, never to the team at large.
 - **Capacity, latency, and concurrency targets.** No performance thresholds have been agreed; the Dev Server is shared with other stacks and v1 is scoped to a small team.
