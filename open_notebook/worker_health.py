@@ -10,83 +10,101 @@ That failure is invisible in exactly the way that matters: source processing,
 embeddings, and every study artifact are background commands, so a silenced worker
 looks identical to a model that never answers.
 
-This module answers one question — is work sitting unclaimed? — and leaves the
-decision of what to do about it to the caller.
+**Why persistence rather than a timestamp.** The `command` table carries no
+creation time — its fields are `app`, `args`, `context`, `error_message`, `id`,
+`name`, `result`, `status`, and nothing else. (The library's own startup scan
+orders by a `created` column that does not exist, which SurrealDB tolerates
+silently.) So age cannot be read from the database. Instead an observer remembers
+which command ids it has seen unclaimed and for how long, which measures
+non-consumption directly and needs nothing from the library or the schema.
 """
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from typing import Dict, Iterable, List, Optional, Set
 
 from open_notebook.database.repository import repo_query
 
-# How long a command may sit in `new` before the queue is considered stalled.
-# Well above the sub-second claim time of a healthy worker, and well below the
-# point where somebody notices their upload never finished.
+# How long a single command may stay unclaimed before the queue is considered
+# stalled. Well above the sub-second claim time of a healthy worker, and well
+# below the point where somebody notices their upload never finished.
 DEFAULT_STALL_THRESHOLD_SECONDS = 90.0
 
 
 @dataclass(frozen=True)
 class QueueState:
-    """What the command queue looks like right now."""
+    """What the command queue looks like across successive observations."""
 
     new_count: int
-    oldest_age_seconds: Optional[float]
+    # Seconds the longest-waiting command has been observed unclaimed. None when
+    # nothing is queued — distinct from 0.0, which means "queued, just arrived".
+    longest_unclaimed_seconds: Optional[float]
     threshold_seconds: float
 
     @property
     def is_stalled(self) -> bool:
-        """True when work is queued and the oldest item has waited too long.
+        """True when one command has stayed unclaimed beyond the threshold.
 
         Depth alone is not a fault: a healthy worker under load legitimately has
-        items in `new`. Age is the signal, because a consuming worker keeps the
-        oldest item young.
+        items in `new`. Persistence of the *same* item is the signal, because a
+        consuming worker never leaves one sitting.
         """
-        if self.new_count == 0 or self.oldest_age_seconds is None:
+        if self.new_count == 0 or self.longest_unclaimed_seconds is None:
             return False
-        return self.oldest_age_seconds > self.threshold_seconds
+        return self.longest_unclaimed_seconds > self.threshold_seconds
+
+    def describe(self) -> str:
+        """A log line that does not disguise 'unknown' as 'zero'."""
+        if self.new_count == 0:
+            return "queue empty"
+        if self.longest_unclaimed_seconds is None:
+            return f"{self.new_count} queued, first observation"
+        return (
+            f"{self.new_count} queued, longest unclaimed "
+            f"{self.longest_unclaimed_seconds:.0f}s of {self.threshold_seconds:.0f}s"
+        )
 
 
-def _parse_created(value: Any) -> Optional[datetime]:
-    """Coerce SurrealDB's `created` into an aware datetime, or None."""
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    if isinstance(value, str):
-        text = value.replace("Z", "+00:00")
-        try:
-            parsed = datetime.fromisoformat(text)
-        except ValueError:
-            return None
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-    return None
+async def read_new_command_ids() -> List[str]:
+    """Ids of commands nobody has claimed."""
+    rows = await repo_query("SELECT id FROM command WHERE status = 'new'")
+    ids: List[str] = []
+    for row in rows or []:
+        if isinstance(row, dict) and row.get("id") is not None:
+            ids.append(str(row["id"]))
+    return ids
 
 
-async def read_queue_state(
-    threshold_seconds: float = DEFAULT_STALL_THRESHOLD_SECONDS,
-    now: Optional[datetime] = None,
-) -> QueueState:
-    """Measure unclaimed work without touching it."""
-    counted = await repo_query(
-        "SELECT count() FROM command WHERE status = 'new' GROUP ALL"
-    )
-    new_count = 0
-    if counted:
-        raw = counted[0].get("count") if isinstance(counted[0], dict) else None
-        new_count = int(raw or 0)
+@dataclass
+class QueueObserver:
+    """Tracks how long each queued command has gone unclaimed.
 
-    if new_count == 0:
-        return QueueState(0, None, threshold_seconds)
+    Stateful by necessity, and the state is deliberately tiny: one timestamp per
+    unclaimed command id, discarded the moment that command is picked up.
+    """
 
-    oldest = await repo_query(
-        "SELECT created FROM command WHERE status = 'new' ORDER BY created ASC LIMIT 1"
-    )
-    created = _parse_created(oldest[0].get("created")) if oldest else None
-    if created is None:
-        # Queued work whose age cannot be established. Reported as un-aged rather
-        # than as stalled: restarting the worker on an unparseable timestamp would
-        # turn a reporting gap into a restart loop.
-        return QueueState(new_count, None, threshold_seconds)
+    threshold_seconds: float = DEFAULT_STALL_THRESHOLD_SECONDS
+    _first_seen: Dict[str, float] = field(default_factory=dict)
 
-    reference = now or datetime.now(timezone.utc)
-    age = (reference - created).total_seconds()
-    return QueueState(new_count, max(age, 0.0), threshold_seconds)
+    def observe(self, new_ids: Iterable[str], now: float) -> QueueState:
+        """Record the current queue and report what it implies."""
+        current: Set[str] = set(new_ids)
+
+        # Forget anything that has been claimed, so a command that queues again
+        # later starts a fresh clock rather than inheriting an old one.
+        for known in list(self._first_seen):
+            if known not in current:
+                del self._first_seen[known]
+
+        for command_id in current:
+            self._first_seen.setdefault(command_id, now)
+
+        if not current:
+            return QueueState(0, None, self.threshold_seconds)
+
+        longest = max(now - self._first_seen[cid] for cid in current)
+        return QueueState(len(current), longest, self.threshold_seconds)
+
+    def reset(self) -> None:
+        """Drop all observations. Used after a restart, so the worker is judged on
+        what happens next rather than on the backlog it inherited."""
+        self._first_seen.clear()

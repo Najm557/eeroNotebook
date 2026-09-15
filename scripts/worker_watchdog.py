@@ -14,12 +14,14 @@ import asyncio
 import os
 import subprocess
 import sys
+import time
 
 from loguru import logger
 
 from open_notebook.worker_health import (
     DEFAULT_STALL_THRESHOLD_SECONDS,
-    read_queue_state,
+    QueueObserver,
+    read_new_command_ids,
 )
 
 CHECK_INTERVAL_SECONDS = float(os.environ.get("OPEN_NOTEBOOK_WATCHDOG_INTERVAL", "30"))
@@ -68,31 +70,30 @@ async def main() -> int:
         CHECK_INTERVAL_SECONDS,
         STALL_THRESHOLD_SECONDS,
     )
-    # Let the stack finish starting before the first read, so a cold boot with a
-    # genuine backlog is not mistaken for a stall.
+    observer = QueueObserver(threshold_seconds=STALL_THRESHOLD_SECONDS)
+
+    # Let the stack finish starting before the first observation, so a cold boot
+    # with a genuine backlog is not mistaken for a stall.
     await asyncio.sleep(RESTART_GRACE_SECONDS)
 
     while True:
         try:
-            state = await read_queue_state(STALL_THRESHOLD_SECONDS)
+            state = observer.observe(await read_new_command_ids(), time.monotonic())
             if state.is_stalled:
                 logger.error(
-                    "watchdog: queue stalled — {} command(s) unclaimed, oldest {:.0f}s "
-                    "(threshold {:.0f}s). The worker's LIVE subscription has most "
-                    "likely died; restarting it to trigger its startup scan.",
-                    state.new_count,
-                    state.oldest_age_seconds or 0.0,
-                    state.threshold_seconds,
+                    "watchdog: queue stalled — {}. The worker's LIVE subscription "
+                    "has most likely died; restarting it to trigger its startup "
+                    "scan.",
+                    state.describe(),
                 )
                 if restart_worker():
+                    # Judge the new worker on what it does next, not on the backlog
+                    # it inherited.
+                    observer.reset()
                     await asyncio.sleep(RESTART_GRACE_SECONDS)
                     continue
             elif state.new_count:
-                logger.debug(
-                    "watchdog: {} queued, oldest {:.0f}s — consuming normally",
-                    state.new_count,
-                    state.oldest_age_seconds or 0.0,
-                )
+                logger.debug("watchdog: {} — consuming normally", state.describe())
         except Exception as exc:
             # Never exit on a transient read failure: a watchdog that dies when the
             # database blinks is worse than no watchdog, because its absence looks

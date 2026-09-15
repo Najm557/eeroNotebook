@@ -1,32 +1,27 @@
 """Tests for stalled-worker detection.
 
-The distinction under test is depth versus age. A busy worker legitimately has
-commands in `new`; a silenced one has *old* commands in `new`. Getting that wrong
-in either direction is costly: treating depth as a fault restarts a healthy worker
-under load, and ignoring age leaves the real failure invisible.
+The distinction under test is depth versus persistence. A busy worker legitimately
+has commands in `new`; a silenced one leaves the *same* command sitting. Getting
+that wrong in either direction is costly: treating depth as a fault restarts a
+healthy worker under load, and missing persistence leaves the real failure
+invisible.
+
+Persistence is measured across the watchdog's own polls because the `command`
+table carries no creation timestamp — an earlier version of this module tried to
+age rows from a `created` column that does not exist, and reported every queue as
+healthy.
 """
 
-from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from open_notebook.worker_health import (
     DEFAULT_STALL_THRESHOLD_SECONDS,
+    QueueObserver,
     QueueState,
-    _parse_created,
-    read_queue_state,
+    read_new_command_ids,
 )
-
-NOW = datetime(2026, 9, 15, 12, 0, 0, tzinfo=timezone.utc)
-
-
-def _responses(count: int, created=None):
-    """Queue the two reads read_queue_state makes, in order."""
-    calls = [[{"count": count}]]
-    if count:
-        calls.append([{"created": created}])
-    return calls
 
 
 class TestStallDecision:
@@ -37,101 +32,117 @@ class TestStallDecision:
         """A worker under load has queued work and is consuming it."""
         assert not QueueState(25, 3.0, 90.0).is_stalled
 
-    def test_old_unclaimed_work_is_a_stall(self) -> None:
+    def test_persistent_unclaimed_work_is_a_stall(self) -> None:
         assert QueueState(1, 120.0, 90.0).is_stalled
 
     def test_exactly_at_threshold_is_not_yet_a_stall(self) -> None:
         assert not QueueState(1, 90.0, 90.0).is_stalled
 
-    def test_unknown_age_is_never_a_stall(self) -> None:
-        """An unparseable timestamp is a reporting gap. Restarting on it would turn
-        that gap into a restart loop."""
+    def test_first_observation_is_never_a_stall(self) -> None:
         assert not QueueState(5, None, 90.0).is_stalled
 
+    def test_describe_distinguishes_unknown_from_zero(self) -> None:
+        """The bug this guards against: an earlier log line rendered a missing
+        measurement as '0s', which made a broken detector look like a healthy
+        queue."""
+        assert "first observation" in QueueState(3, None, 90.0).describe()
+        assert "0s of 90s" in QueueState(3, 0.0, 90.0).describe()
+        assert QueueState(0, None, 90.0).describe() == "queue empty"
 
-class TestReadQueueState:
-    @pytest.mark.asyncio
-    async def test_no_queued_work_skips_the_second_read(self) -> None:
-        with patch(
-            "open_notebook.worker_health.repo_query", new_callable=AsyncMock
-        ) as query:
-            query.side_effect = _responses(0)
-            state = await read_queue_state(now=NOW)
+
+class TestQueueObserver:
+    def test_empty_queue_reports_nothing_queued(self) -> None:
+        observer = QueueObserver(threshold_seconds=90.0)
+        state = observer.observe([], now=1000.0)
         assert state.new_count == 0
-        assert state.oldest_age_seconds is None
-        assert query.await_count == 1, "should not ask for the oldest row when empty"
+        assert state.longest_unclaimed_seconds is None
 
-    @pytest.mark.asyncio
-    async def test_computes_age_of_the_oldest_command(self) -> None:
-        created = NOW - timedelta(seconds=300)
-        with patch(
-            "open_notebook.worker_health.repo_query", new_callable=AsyncMock
-        ) as query:
-            query.side_effect = _responses(4, created)
-            state = await read_queue_state(now=NOW)
-        assert state.new_count == 4
-        assert state.oldest_age_seconds == pytest.approx(300.0)
+    def test_first_sighting_has_no_elapsed_time(self) -> None:
+        observer = QueueObserver(threshold_seconds=90.0)
+        state = observer.observe(["command:a"], now=1000.0)
+        assert state.new_count == 1
+        assert state.longest_unclaimed_seconds == 0.0
+        assert not state.is_stalled
+
+    def test_same_command_still_queued_accumulates_time(self) -> None:
+        observer = QueueObserver(threshold_seconds=90.0)
+        observer.observe(["command:a"], now=1000.0)
+        state = observer.observe(["command:a"], now=1100.0)
+        assert state.longest_unclaimed_seconds == pytest.approx(100.0)
         assert state.is_stalled
 
-    @pytest.mark.asyncio
-    async def test_recent_command_is_healthy(self) -> None:
-        created = NOW - timedelta(seconds=5)
-        with patch(
-            "open_notebook.worker_health.repo_query", new_callable=AsyncMock
-        ) as query:
-            query.side_effect = _responses(2, created)
-            state = await read_queue_state(now=NOW)
+    def test_a_consumed_command_is_forgotten(self) -> None:
+        """A worker that claims work keeps the queue young."""
+        observer = QueueObserver(threshold_seconds=90.0)
+        observer.observe(["command:a"], now=1000.0)
+        observer.observe([], now=1050.0)
+        state = observer.observe(["command:a"], now=1100.0)
+        assert state.longest_unclaimed_seconds == 0.0, (
+            "a requeued id must start a fresh clock, not inherit the old one"
+        )
         assert not state.is_stalled
 
+    def test_steady_throughput_never_looks_stalled(self) -> None:
+        """Different commands arriving and being claimed, indefinitely."""
+        observer = QueueObserver(threshold_seconds=90.0)
+        now = 0.0
+        for i in range(50):
+            now += 30.0
+            state = observer.observe([f"command:{i}"], now=now)
+            assert not state.is_stalled
+
+    def test_longest_waiter_drives_the_decision(self) -> None:
+        observer = QueueObserver(threshold_seconds=90.0)
+        observer.observe(["command:old"], now=1000.0)
+        state = observer.observe(["command:old", "command:new"], now=1200.0)
+        assert state.new_count == 2
+        assert state.longest_unclaimed_seconds == pytest.approx(200.0)
+        assert state.is_stalled
+
+    def test_reset_clears_observations(self) -> None:
+        observer = QueueObserver(threshold_seconds=90.0)
+        observer.observe(["command:a"], now=1000.0)
+        observer.reset()
+        state = observer.observe(["command:a"], now=1500.0)
+        assert state.longest_unclaimed_seconds == 0.0
+
+    def test_default_threshold(self) -> None:
+        assert QueueObserver().threshold_seconds == DEFAULT_STALL_THRESHOLD_SECONDS
+
+
+class TestReadNewCommandIds:
     @pytest.mark.asyncio
-    async def test_iso_string_timestamps_are_accepted(self) -> None:
-        """SurrealDB's client has returned both datetimes and ISO strings."""
+    async def test_extracts_ids(self) -> None:
         with patch(
             "open_notebook.worker_health.repo_query", new_callable=AsyncMock
         ) as query:
-            query.side_effect = _responses(1, "2026-09-15T11:55:00Z")
-            state = await read_queue_state(now=NOW)
-        assert state.oldest_age_seconds == pytest.approx(300.0)
+            query.return_value = [{"id": "command:a"}, {"id": "command:b"}]
+            assert await read_new_command_ids() == ["command:a", "command:b"]
 
     @pytest.mark.asyncio
-    async def test_unparseable_timestamp_reports_count_without_age(self) -> None:
+    async def test_empty_result_is_empty_list(self) -> None:
         with patch(
             "open_notebook.worker_health.repo_query", new_callable=AsyncMock
         ) as query:
-            query.side_effect = _responses(3, "not-a-timestamp")
-            state = await read_queue_state(now=NOW)
-        assert state.new_count == 3
-        assert state.oldest_age_seconds is None
-        assert not state.is_stalled
+            query.return_value = []
+            assert await read_new_command_ids() == []
 
     @pytest.mark.asyncio
-    async def test_clock_skew_does_not_produce_a_negative_age(self) -> None:
-        created = NOW + timedelta(seconds=30)
+    async def test_rows_without_an_id_are_skipped(self) -> None:
         with patch(
             "open_notebook.worker_health.repo_query", new_callable=AsyncMock
         ) as query:
-            query.side_effect = _responses(1, created)
-            state = await read_queue_state(now=NOW)
-        assert state.oldest_age_seconds == 0.0
-        assert not state.is_stalled
+            query.return_value = [{"id": None}, {"status": "new"}, {"id": "command:c"}]
+            assert await read_new_command_ids() == ["command:c"]
 
     @pytest.mark.asyncio
-    async def test_default_threshold_is_used_when_unspecified(self) -> None:
+    async def test_only_new_commands_are_requested(self) -> None:
         with patch(
             "open_notebook.worker_health.repo_query", new_callable=AsyncMock
         ) as query:
-            query.side_effect = _responses(0)
-            state = await read_queue_state()
-        assert state.threshold_seconds == DEFAULT_STALL_THRESHOLD_SECONDS
-
-
-class TestParseCreated:
-    def test_naive_datetime_is_treated_as_utc(self) -> None:
-        parsed = _parse_created(datetime(2026, 9, 15, 12, 0, 0))
-        assert parsed is not None and parsed.tzinfo is timezone.utc
-
-    def test_aware_datetime_is_preserved(self) -> None:
-        assert _parse_created(NOW) == NOW
-
-    def test_unsupported_type_returns_none(self) -> None:
-        assert _parse_created(12345) is None
+            query.return_value = []
+            await read_new_command_ids()
+        assert query.await_args is not None
+        sql = query.await_args.args[0]
+        assert "status = 'new'" in sql
+        assert "created" not in sql, "the command table has no created column"
