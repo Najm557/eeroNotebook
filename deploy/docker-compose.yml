@@ -144,6 +144,15 @@ services:
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: "9999"
 
+      # Required, and unprefixed — GoTrue refuses to start without it, which is
+      # how lh-auth spells it too. The in-stack address is the honest value:
+      # this service is unpublished and reached only by container name, so no
+      # external URL would resolve to it. GoTrue uses this to build links and
+      # redirect targets, which is inert here — mailer autoconfirm is on and no
+      # SMTP exists. If GoTrue is ever fronted by mon-traefik, this becomes that
+      # origin.
+      API_EXTERNAL_URL: http://eeronotebook-auth:9999
+
       GOTRUE_DB_DRIVER: postgres
       # Password is hex, so it needs no URL-escaping here. See .env.example.
       GOTRUE_DB_DATABASE_URL: postgres://${AUTH_DB_USER:-eeronotebook_auth}:${AUTH_DB_PASSWORD}@eeronotebook-authdb:5432/${AUTH_DB_NAME:-eeronotebook_auth}?sslmode=disable
