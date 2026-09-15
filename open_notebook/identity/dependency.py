@@ -13,6 +13,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from open_notebook.domain.member import Member
 from open_notebook.exceptions import AuthenticationError
+from open_notebook.identity.admin import claims_for_admin_password
 from open_notebook.identity.provider import GoTrueProvider, IdentityProvider
 
 # auto_error=False so a missing header raises AuthenticationError through the
@@ -55,12 +56,24 @@ async def current_member(
     an empty list says "you own nothing", and confusing them is how access checks
     silently pass.
     """
+    # MemberAuthMiddleware has normally resolved the caller already. Reusing that
+    # avoids a second verification and a second database read per request, and it
+    # keeps one answer per request — a route and the gate cannot disagree about who
+    # is calling.
+    resolved = getattr(request.state, "member", None)
+    if isinstance(resolved, Member):
+        return resolved
+
     if credentials is None or not credentials.credentials:
         raise AuthenticationError("Missing bearer token")
     if credentials.scheme.lower() != "bearer":
         raise AuthenticationError("Authorization scheme must be Bearer")
 
-    claims = get_provider().verify(credentials.credentials)
+    # Same order as the middleware: the admin password resolves to a member rather
+    # than bypassing resolution.
+    claims = claims_for_admin_password(credentials.credentials)
+    if claims is None:
+        claims = get_provider().verify(credentials.credentials)
     member = await Member.resolve(
         provider=claims.provider, subject=claims.subject, email=claims.email
     )

@@ -20,7 +20,6 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from api.auth import PasswordAuthMiddleware
 from api.middleware import MaxBodySizeMiddleware, get_max_upload_size_bytes
 from api.routers import (
     auth,
@@ -58,6 +57,7 @@ from open_notebook.exceptions import (
     RateLimitError,
     UnsupportedTypeException,
 )
+from open_notebook.identity import DEFAULT_EXCLUDED_PATHS, MemberAuthMiddleware
 from open_notebook.utils.encryption import get_secret_from_env
 
 
@@ -232,23 +232,22 @@ if CORS_IS_DEFAULT_WILDCARD:
 else:
     logger.info(f"CORS allowed origins: {CORS_ALLOWED_ORIGINS}")
 
-# Add password authentication middleware first
-# Exclude /api/auth/status and /api/config from authentication
+# Resolve every request to a member, or refuse it (spec task 5.3). Replaces
+# upstream's shared-password gate: the admin password still works, but it resolves
+# to an admin member rather than bypassing resolution, so task 6.2's access checks
+# apply to the operator as they do to anyone else.
+#
+# The exclusion list is upstream's, verbatim and deliberately: /api/config and
+# /api/auth/status are read by the frontend before anyone has signed in, and the
+# documentation routes are how an operator inspects a deployment that is refusing
+# their credentials.
 app.add_middleware(
-    PasswordAuthMiddleware,
-    excluded_paths=[
-        "/",
-        "/health",
-        "/docs",
-        "/openapi.json",
-        "/redoc",
-        "/api/auth/status",
-        "/api/config",
-    ],
+    MemberAuthMiddleware,
+    excluded_paths=DEFAULT_EXCLUDED_PATHS,
 )
 
 # Reject oversized request bodies before they reach auth or routing - added
-# after PasswordAuthMiddleware (so it wraps around it) so a too-large request
+# after MemberAuthMiddleware (so it wraps around it) so a too-large request
 # is rejected before spending any work checking credentials.
 logger.info(
     f"Max request body size: {MAX_UPLOAD_SIZE_BYTES / (1024 * 1024):g}MB "
