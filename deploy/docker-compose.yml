@@ -112,6 +112,9 @@ services:
       POSTGRES_PASSWORD: ${AUTH_DB_PASSWORD:?AUTH_DB_PASSWORD must be set}
     volumes:
       - auth_db_data:/var/lib/postgresql/data
+      # Creates the auth schema GoTrue's first migration assumes already exists.
+      # Runs only on an empty data volume. See the file for why it is needed.
+      - ./auth-db-init:/docker-entrypoint-initdb.d:ro
     networks:
       - eeronotebook_internal
     restart: unless-stopped
