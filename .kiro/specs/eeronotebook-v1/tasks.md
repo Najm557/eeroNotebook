@@ -112,7 +112,7 @@ Models are already installed: `qwen2.5:14b` and `nomic-embed-text` were pulled d
     - `eeronotebook.local` → 8502 and `api.eeronotebook.local` → 5055, both over `websecure`, reached by container name on `monitoring_net`, so no host port was added and none could collide
     - Plain HTTP redirects with 301; the redirect is attached to the two eeroNotebook routers, not to the `web` entrypoint, because every other stack behind this proxy is HTTP-only
     - Private CA per the `EarWig/traefik/` pattern, generated on the host; the script adds a `serverAuth` EKU and an 825-day leaf, both of which modern clients require and that script predates
-    - Registered as a `tls.certificates` entry, not a second default: `mon-traefik`'s default certificate belongs to learninglab, and a second default would leave which one wins undefined — SNI selects instead
+    - Registered as a `tls.certificates` entry, not a second default: `mon-traefik`'s dtefault certificate belongs to learninglab, and a second default would leave which one wins undefined — SNI selects instead
     - `API_URL` had to be set explicitly: left to auto-detect, the app told the browser to call `https://eeronotebook.local:5055`, a port the proxy neither serves nor terminates TLS on. Consequence is that the UI is now reached by name; `http://<host>:8502` remains only a debugging path
     - Verified on the host and again across the network: UI 307 → `/notebooks` 200, API health, and authenticated `/api/notebooks` 200 both directly and through the UI origin, all with the certificate verifying against the private CA and failing without it
     - Verified all eight pre-existing routes return their pre-change codes, and that learninglab's default certificate and its by-IP HTTPS fallback are untouched
@@ -137,14 +137,19 @@ Models are already installed: `qwen2.5:14b` and `nomic-embed-text` were pulled d
     - Noticed and left alone: `mon-dozzle` is configured with `DOZZLE_REMOTE_AGENT=10.17.8.52:7007`, which fails every five seconds because `labplatform-containment` binds 7007 to loopback only. Pre-existing, and another stack's configuration
     - _Requirements: 13.6, 13.8_
 
-- [ ] 5. Identity
-  - [~] 5.1 Add a dedicated GoTrue service
-    - Unpublished, on the stack network only, with its own database and JWT secret
-    - Deliberately separate from `lh-auth`, so a compromise or migration in `legendary-hunts` does not reach eeroNotebook
-    - Add `eeronotebook-auth` and its own Postgres to `deploy/docker-compose.yml`, both on `eeronotebook_internal` only, with no host ports — GoTrue is a component of eeroNotebook, so it is a container like everything else
-    - Generate `GOTRUE_JWT_SECRET` and the Postgres password on the host into `deploy/.env`, and make compose fail fast if either is unset, as the existing four secrets already do
-    - Disable open sign-up; members are created by the operator, which is the whole population of a small team
-    - Give both containers a healthcheck the app can depend on, and check first whether the image ships `curl` — 2.2 lost time to a probe that used a binary the image did not have
+- [-] 5. Identity
+  - [x] 5.1 Add a dedicated GoTrue service
+    - `eeronotebook-auth` (`public.ecr.aws/supabase/gotrue:v2.188.1`, the same image and version as `lh-auth`) and `eeronotebook-authdb` (`postgres:16-alpine`), both on `eeronotebook_internal` only. Verified: empty `PortBindings` on both, no host listener on 9999, and neither container on `monitoring_net` (Requirements 13.2, 13.9)
+    - Deliberately separate from `lh-auth`: a shared auth database or JWT secret would make a compromise or migration in `legendary-hunts` reach this stack, and its settings are tuned for a different application — 6-character passwords against this stack's 12
+    - `AUTH_DB_PASSWORD` and `GOTRUE_JWT_SECRET` generated on the host into `deploy/.env`, appended without reading or rewriting any existing line, mode 600 preserved. Verified compose fails fast: unsetting `AUTH_DB_PASSWORD` gives "required variable AUTH_DB_PASSWORD is missing a value" rather than a silent empty string. The DB password is hex on purpose — it is interpolated into a `postgres://` URL, where `@ : / ?` would terminate the URL early
+    - **Sign-up disabled and verified, not assumed:** `POST /signup` answers `422 signup_disabled`. Members come from the operator via the admin path, which needs a `service_role` token task 5.2 mints
+    - Access tokens expire in an hour with rotating refresh tokens. The shared password they replace never expired at all
+    - `GOTRUE_MAILER_AUTOCONFIRM` is on because no SMTP exists on this host: a member required to confirm by email could never sign in. Revisit if self-service signup is ever enabled
+    - **The `curl` check 5.1 asked for paid off:** the GoTrue image ships no `curl`, only `wget` and `nc`. Probed with `wget --spider`; Postgres with `pg_isready` against its own named database, since the default probe checks `postgres`, which is not the database GoTrue uses
+    - **Three boot failures, each a prerequisite Supabase's own image supplies and a plain cluster does not**, and each visible only at the end of a full dump of the failing migration: `API_EXTERNAL_URL` is required and unprefixed, unlike every `GOTRUE_*` setting around it; the `auth` schema must already exist before the first migration's `CREATE TABLE IF NOT EXISTS auth.users`; and `20240612123726_enable_rls_update_grants` grants to `postgres` and `dashboard_user`, failing with `role "postgres" does not exist` on a cluster whose superuser is named otherwise
+    - Fixed in `deploy/auth-db-init/01-auth-schema.sql` rather than by hand against the running database, so a fresh deployment works without a manual step. Since initdb scripts only re-run on an *empty* data directory, each discovery cost a volume wipe — which is why the role list is generous rather than minimal, all `NOLOGIN`, nothing authenticating as them. 23 `auth` tables migrated on the successful run
+    - Nothing consumes this yet, by design: the application has no auth environment and no `depends_on` for it, verified by inspection, and stayed healthy throughout. Adding the dependency before anything reads it would only mean the app could not start when GoTrue could not
+    - **`auth_db_data` is not covered by `deploy/backup/`,** which predates this service and captures `db_data` and `app_data` only. Losing that volume loses every member account, and task 5.3 makes GoTrue the only way in — so backup coverage is owed before then, not after
     - _Requirements: 4.1, 13.2, 13.9_
   - [~] 5.2 Build the Identity_Boundary
     - One internal seam that resolves a request to an authenticated member; provider-specific token verification lives only there
