@@ -1,0 +1,8 @@
+-- Reverse migration 24.
+--
+-- Dropping this table discards every local identity. Anything referencing a
+-- member — Notebook ownership from migration 25 onward — must be rolled back
+-- first, or it is left pointing at records that no longer exist.
+
+REMOVE INDEX IF EXISTS member_provider_subject ON TABLE member;
+REMOVE TABLE IF EXISTS member;

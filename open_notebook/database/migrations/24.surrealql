@@ -1,0 +1,36 @@
+-- Migration 24: the `member` table — a local identity for an authenticated person.
+--
+-- eeroNotebook authenticates people through an external provider (GoTrue at v1)
+-- but does not let provider identifiers into application data. A member record
+-- is the local identity everything else references, so replacing the provider
+-- rewrites this table's `provider` and `subject` columns and nothing else
+-- (ADR 0003). Notebook ownership in migration 25 points at `member`, never at a
+-- provider's user id.
+--
+-- SCHEMAFULL on purpose: this table decides who can reach what, and a typo that
+-- silently creates a new field is not a failure mode worth having here. Verified
+-- behaviour is that an unknown field is dropped rather than rejected — the write
+-- still succeeds, so this prevents field creation, not bad writes. The ASSERTs
+-- below are what refuse bad values.
+
+DEFINE TABLE IF NOT EXISTS member SCHEMAFULL;
+
+-- Which provider vouched for this person, and their identifier within it. Kept
+-- as two fields rather than one composite string so that a provider migration is
+-- a readable UPDATE rather than string surgery.
+DEFINE FIELD IF NOT EXISTS provider ON TABLE member TYPE string ASSERT $value != NONE AND $value != "";
+DEFINE FIELD IF NOT EXISTS subject ON TABLE member TYPE string ASSERT $value != NONE AND $value != "";
+
+-- Convenience for display and for an operator identifying an account. Optional
+-- because it is the provider's claim, not this system's source of truth, and a
+-- provider may not supply it.
+DEFINE FIELD IF NOT EXISTS email ON TABLE member TYPE option<string>;
+
+DEFINE FIELD IF NOT EXISTS created ON TABLE member TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS updated ON TABLE member TYPE datetime DEFAULT time::now();
+
+-- The key. Unique on the pair, so one provider identity resolves to exactly one
+-- member and a concurrent first sign-in cannot create two records for the same
+-- person. Enforced by the database rather than by a read-then-write in
+-- application code, which is racy by construction.
+DEFINE INDEX IF NOT EXISTS member_provider_subject ON TABLE member FIELDS provider, subject UNIQUE;
