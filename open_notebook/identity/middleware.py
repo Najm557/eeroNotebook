@@ -37,6 +37,12 @@ DEFAULT_EXCLUDED_PATHS: List[str] = [
     "/redoc",
     "/api/auth/status",
     "/api/config",
+    # Added for task 5.4, and the only additions to upstream's list. These are
+    # what a caller uses when they have no session yet, so requiring one would be
+    # circular. They are not a hole: /login and /refresh verify credentials
+    # themselves and hand back a session, rather than granting access to data.
+    "/api/auth/login",
+    "/api/auth/refresh",
 ]
 
 

@@ -174,9 +174,11 @@ class TestIdentityStoreFailures:
         assert response.json()["detail"] != []
 
 
-class TestExclusionListMatchesUpstream:
-    def test_exact_upstream_paths(self) -> None:
-        """Anything added or removed here silently gains or loses protection."""
+class TestExclusionList:
+    def test_exact_expected_paths(self) -> None:
+        """Pinned deliberately: anything added or removed here silently gains or
+        loses protection. Upstream's seven, plus the two sign-in routes a caller
+        needs before they have a session — requiring one there would be circular."""
         assert identity_middleware.DEFAULT_EXCLUDED_PATHS == [
             "/",
             "/health",
@@ -185,4 +187,22 @@ class TestExclusionListMatchesUpstream:
             "/redoc",
             "/api/auth/status",
             "/api/config",
+            "/api/auth/login",
+            "/api/auth/refresh",
         ]
+
+    def test_no_data_route_is_excluded(self) -> None:
+        """The exclusions must never contain something that returns notebooks,
+        sources, notes or study material."""
+        data_prefixes = (
+            "/api/notebooks",
+            "/api/sources",
+            "/api/notes",
+            "/api/search",
+            "/api/chat",
+            "/api/insights",
+            "/api/models",
+            "/api/credentials",
+        )
+        for path in identity_middleware.DEFAULT_EXCLUDED_PATHS:
+            assert not path.startswith(data_prefixes), f"{path} must require a member"
