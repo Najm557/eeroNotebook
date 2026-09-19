@@ -209,6 +209,11 @@ export const itIT = {
     signingIn: "Accesso in corso...",
     signIn: "Accedi",
     connectErrorHint: "Impossibile connettersi al server. Verifica che l'API sia in esecuzione.",
+    emailPlaceholder: "Email",
+    invalidCredentials: "Email o password non validi.",
+    operatorHint: "Operatore? Lascia l'email vuota.",
+    sessionExpired: "La sessione è scaduta. Accedi di nuovo.",
+    signedInAs: "Accesso come {{email}}",
   },
   navigation: {
     collect: "Raccogli",

@@ -8,6 +8,7 @@ import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/lib/hooks/use-auth'
+import { useAuthStore } from '@/lib/stores/auth-store'
 import { useSidebarStore } from '@/lib/stores/sidebar-store'
 import { useCreateDialogs } from '@/lib/hooks/use-create-dialogs'
 import {
@@ -81,6 +82,9 @@ export function AppSidebar() {
   const navigation = getNavigation(t)
   const pathname = usePathname()
   const { logout } = useAuth()
+  // Shown next to sign-out: with per-member notebooks, which member is looking is
+  // the difference between an empty list and a missing one.
+  const signedInEmail = useAuthStore((state) => state.email)
   const { isCollapsed, toggleCollapse } = useSidebarStore()
   const { openSourceDialog, openNotebookDialog, openPodcastDialog } = useCreateDialogs()
 
@@ -349,6 +353,16 @@ export function AppSidebar() {
             )}
           </div>
 
+          {/* Who is signed in. Notebooks are per-member now, so which member is
+              looking is the difference between an empty list and a missing one. */}
+          {signedInEmail && !isCollapsed && (
+            <div
+              className="px-1 pb-1 text-xs text-muted-foreground truncate"
+              title={signedInEmail}
+            >
+              {t('auth.signedInAs', { email: signedInEmail })}
+            </div>
+          )}
           {isCollapsed ? (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -361,7 +375,11 @@ export function AppSidebar() {
                   <LogOut className="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
-               <TooltipContent side="right">{t('common.signOut')}</TooltipContent>
+               <TooltipContent side="right">
+                 {signedInEmail
+                   ? `${t('auth.signedInAs', { email: signedInEmail })} — ${t('common.signOut')}`
+                   : t('common.signOut')}
+               </TooltipContent>
             </Tooltip>
           ) : (
             <Button

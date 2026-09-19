@@ -207,6 +207,11 @@ export const enUS = {
     signingIn: "Signing in...",
     signIn: "Sign In",
     connectErrorHint: "Unable to connect to server. Please check if the API is running.",
+    emailPlaceholder: "Email",
+    invalidCredentials: "Invalid email or password.",
+    operatorHint: "Operator? Leave the email blank.",
+    sessionExpired: "Your session has expired. Please sign in again.",
+    signedInAs: "Signed in as {{email}}",
   },
   navigation: {
     collect: "Collect",

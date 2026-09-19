@@ -209,6 +209,11 @@ export const zhTW = {
     signingIn: "正在登入...",
     signIn: "登入",
     connectErrorHint: "無法連線至伺服器。請檢查 API 是否正在運行。",
+    emailPlaceholder: "電子郵件",
+    invalidCredentials: "電子郵件或密碼無效。",
+    operatorHint: "管理者？請將電子郵件留空。",
+    sessionExpired: "工作階段已逾期，請重新登入。",
+    signedInAs: "已登入：{{email}}",
   },
   navigation: {
     collect: "採集",

@@ -209,6 +209,11 @@ export const plPL = {
     signingIn: "Logowanie...",
     signIn: "Zaloguj się",
     connectErrorHint: "Nie można połączyć się z serwerem. Sprawdź, czy API jest uruchomione.",
+    emailPlaceholder: "E-mail",
+    invalidCredentials: "Nieprawidłowy e-mail lub hasło.",
+    operatorHint: "Operator? Pozostaw pole e-mail puste.",
+    sessionExpired: "Sesja wygasła. Zaloguj się ponownie.",
+    signedInAs: "Zalogowano jako {{email}}",
   },
   navigation: {
     collect: "Zbieraj",

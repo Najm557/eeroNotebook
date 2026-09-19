@@ -209,6 +209,11 @@ export const ruRU = {
     signingIn: "Вход...",
     signIn: "Войти",
     connectErrorHint: "Не удаётся подключиться к серверу. Проверьте, запущен ли API.",
+    emailPlaceholder: "Электронная почта",
+    invalidCredentials: "Неверная почта или пароль.",
+    operatorHint: "Оператор? Оставьте поле почты пустым.",
+    sessionExpired: "Сеанс истёк. Войдите снова.",
+    signedInAs: "Вы вошли как {{email}}",
   },
   navigation: {
     collect: "Собрать",

@@ -209,6 +209,11 @@ export const frFR = {
     signingIn: "Connexion...",
     signIn: "Se connecter",
     connectErrorHint: "Impossible de se connecter au serveur. Veuillez vérifier si l'API est lancée.",
+    emailPlaceholder: "Adresse e-mail",
+    invalidCredentials: "E-mail ou mot de passe invalide.",
+    operatorHint: "Opérateur ? Laissez l'e-mail vide.",
+    sessionExpired: "Votre session a expiré. Veuillez vous reconnecter.",
+    signedInAs: "Connecté en tant que {{email}}",
   },
   navigation: {
     collect: "Collecter",

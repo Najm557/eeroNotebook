@@ -14,8 +14,18 @@ import { useTranslation } from '@/lib/hooks/use-translation'
 
 export function LoginForm() {
   const { t, language } = useTranslation()
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const { login, isLoading, error } = useAuth()
+  // Prefer the translated reason when the store named one; fall back to its raw
+  // message for anything it could not classify.
+  const errorCode = useAuthStore((state) => state.errorCode)
+  const shownError =
+    errorCode === 'invalidCredentials'
+      ? t('auth.invalidCredentials')
+      : errorCode === 'sessionExpired'
+        ? t('auth.sessionExpired')
+        : error
   const { authRequired, checkAuthRequired, hasHydrated, isAuthenticated } = useAuthStore()
   const [isCheckingAuth, setIsCheckingAuth] = useState(true)
   const [configInfo, setConfigInfo] = useState<{ apiUrl: string; version: string; buildTime: string } | null>(null)
@@ -129,10 +139,13 @@ export function LoginForm() {
     e.preventDefault()
     if (password.trim()) {
       try {
-        await login(password)
+        // An empty email means the operator signing in with the admin credential.
+        // The API distinguishes the two, and checks the operator's locally so they
+        // can still get in when the identity provider is down.
+        await login(password, email.trim() || undefined)
       } catch (error) {
         console.error('Unhandled error during login:', error)
-        // The auth store should handle most errors, but this catches any unhandled ones
+        // The auth store handles expected failures; this catches anything else.
       }
     }
   }
@@ -150,18 +163,30 @@ export function LoginForm() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <Input
+                type="email"
+                autoComplete="username"
+                placeholder={t('auth.emailPlaceholder')}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={isLoading}
+              />
+            </div>
+            <div>
+              <Input
                 type="password"
+                autoComplete="current-password"
                 placeholder={t('auth.passwordPlaceholder')}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={isLoading}
               />
             </div>
+            <p className="text-xs text-muted-foreground">{t('auth.operatorHint')}</p>
 
-            {error && (
+            {shownError && (
               <div className="flex items-center gap-2 text-red-600 text-sm">
                 <AlertCircle className="h-4 w-4" />
-                {error}
+                {shownError}
               </div>
             )}
 

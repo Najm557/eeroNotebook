@@ -212,6 +212,11 @@ export const deDE = {
     signingIn: "Anmelden...",
     signIn: "Anmelden",
     connectErrorHint: "Keine Verbindung zum Server möglich. Bitte prüfe, ob die API läuft.",
+    emailPlaceholder: "E-Mail",
+    invalidCredentials: "E-Mail oder Passwort ungültig.",
+    operatorHint: "Betreiber? E-Mail leer lassen.",
+    sessionExpired: "Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.",
+    signedInAs: "Angemeldet als {{email}}",
   },
   navigation: {
     collect: "Sammeln",

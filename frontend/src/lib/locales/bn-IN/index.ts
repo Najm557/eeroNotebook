@@ -209,6 +209,11 @@ export const bnIN = {
     signingIn: "সাইন ইন করা হচ্ছে...",
     signIn: "সাইন ইন",
     connectErrorHint: "সার্ভারে সংযোগ করতে অক্ষম। API চালু আছে কিনা চেক করুন।",
+    emailPlaceholder: "ইমেল",
+    invalidCredentials: "ইমেল বা পাসওয়ার্ড ভুল।",
+    operatorHint: "অপারেটর? ইমেল ফাঁকা রাখুন।",
+    sessionExpired: "আপনার সেশনের সময় শেষ হয়েছে। আবার সাইন ইন করুন।",
+    signedInAs: "{{email}} হিসেবে সাইন ইন করা আছে",
   },
   navigation: {
     collect: "সংগ্রহ",

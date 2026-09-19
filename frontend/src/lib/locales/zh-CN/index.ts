@@ -209,6 +209,11 @@ export const zhCN = {
     signingIn: "正在登录...",
     signIn: "登录",
     connectErrorHint: "无法连接到服务器。请检查 API 是否正在运行。",
+    emailPlaceholder: "电子邮箱",
+    invalidCredentials: "邮箱或密码无效。",
+    operatorHint: "管理员？请将邮箱留空。",
+    sessionExpired: "会话已过期，请重新登录。",
+    signedInAs: "已登录：{{email}}",
   },
   navigation: {
     collect: "采集",

@@ -209,6 +209,11 @@ export const esES = {
     signingIn: "Iniciando sesión...",
     signIn: "Iniciar sesión",
     connectErrorHint: "No se puede conectar al servidor. Por favor, verifica si la API está funcionando.",
+    emailPlaceholder: "Correo electrónico",
+    invalidCredentials: "Correo o contraseña no válidos.",
+    operatorHint: "¿Operador? Deja el correo en blanco.",
+    sessionExpired: "Tu sesión ha caducado. Vuelve a iniciar sesión.",
+    signedInAs: "Sesión iniciada como {{email}}",
   },
   navigation: {
     collect: "Recopilar",

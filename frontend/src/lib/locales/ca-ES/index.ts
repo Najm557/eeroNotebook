@@ -209,6 +209,11 @@ export const caES = {
     signingIn: "S'està iniciant la sessió...",
     signIn: "Inicia la sessió",
     connectErrorHint: "No es pot connectar al servidor. Comprova si l'API s'està executant.",
+    emailPlaceholder: "Correu electrònic",
+    invalidCredentials: "Correu o contrasenya no vàlids.",
+    operatorHint: "Ets l'operador? Deixa el correu en blanc.",
+    sessionExpired: "La teva sessió ha caducat. Torna a iniciar la sessió.",
+    signedInAs: "Sessió iniciada com a {{email}}",
   },
   navigation: {
     collect: "Recull",

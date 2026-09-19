@@ -209,6 +209,11 @@ export const jaJP = {
     signingIn: "サインイン中...",
     signIn: "サインイン",
     connectErrorHint: "サーバーに接続できません。APIが起動しているか確認してください。",
+    emailPlaceholder: "メールアドレス",
+    invalidCredentials: "メールアドレスまたはパスワードが正しくありません。",
+    operatorHint: "運用者の方はメールアドレスを空欄にしてください。",
+    sessionExpired: "セッションの有効期限が切れました。再度サインインしてください。",
+    signedInAs: "{{email}} でサインイン中",
   },
   navigation: {
     collect: "収集",

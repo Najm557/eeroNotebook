@@ -209,6 +209,11 @@ export const ptBR = {
     signingIn: "Entrando...",
     signIn: "Entrar",
     connectErrorHint: "Não foi possível conectar ao servidor. Verifique se a API está rodando.",
+    emailPlaceholder: "E-mail",
+    invalidCredentials: "E-mail ou senha inválidos.",
+    operatorHint: "É o operador? Deixe o e-mail em branco.",
+    sessionExpired: "Sua sessão expirou. Entre novamente.",
+    signedInAs: "Conectado como {{email}}",
   },
   navigation: {
     collect: "Coletar",

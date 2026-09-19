@@ -209,6 +209,11 @@ export const trTR = {
     signingIn: "Giriş yapılıyor...",
     signIn: "Giriş Yap",
     connectErrorHint: "Sunucuya bağlanılamıyor. API'nin çalışıp çalışmadığını kontrol edin.",
+    emailPlaceholder: "E-posta",
+    invalidCredentials: "E-posta veya şifre geçersiz.",
+    operatorHint: "Operatör müsünüz? E-posta alanını boş bırakın.",
+    sessionExpired: "Oturumunuz sona erdi. Lütfen yeniden giriş yapın.",
+    signedInAs: "{{email}} olarak giriş yapıldı",
   },
   navigation: {
     collect: "Topla",
