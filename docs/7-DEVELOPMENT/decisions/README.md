@@ -51,5 +51,6 @@ What this makes easier, what it makes harder, what to watch. (bullets)
 | [ADR-007](ADR-007-optin-runtimes.md) | Heavy extraction runtimes (Docling, Crawl4AI local) are opt-in, installed at startup | Accepted |
 | [ADR-008](ADR-008-share-by-local-member.md) | A Share names a member of this instance, never an address the provider holds | Accepted |
 | [ADR-009](ADR-009-search-scoping-inside-the-query.md) | Notebook scoping lives inside the search functions, not around their results | Accepted |
+| [ADR-010](ADR-010-mcp-not-offered-at-v1.md) | The MCP interface is not offered at v1, and access enforcement has exactly one point | Accepted |
 | [PDR-001](PDR-001-single-user-first.md) | Single-user first; don't preclude multi-user | Accepted |
 | [PDR-002](PDR-002-provider-agnostic-core.md) | Provider-agnostic core by default | Accepted |

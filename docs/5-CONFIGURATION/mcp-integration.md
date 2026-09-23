@@ -1,5 +1,19 @@
 # Model Context Protocol (MCP) Integration
 
+## ⛔ Not available on eeroNotebook at v1 — do not use the configuration below
+
+> **The instructions on this page still work, and that is the problem.** They tell you to put `OPEN_NOTEBOOK_PASSWORD` in an MCP client's config file. On eeroNotebook that value is the **operator's** credential: the MCP server authenticates as the admin member, which owns every Notebook that existed before member accounts did. Following this page hands a third-party MCP client — and every AI-assistant conversation through it — read and write access to the entire library, plus the instance's model and processing settings.
+>
+> **Access enforcement is not the gap.** The MCP server holds no database access; every tool it exposes is an ordinary HTTP request through this API's authentication middleware and per-route ownership checks. A member with no access gets an empty list from `list_notebooks`, a 404 from every read and write addressed by id, and no results from `search`. That was measured against the published package, not assumed. Requirement 7.2 ("the MCP interface enforces the same access rules as the REST API") is therefore satisfied by there being exactly **one** enforcement point, in this API — there is no second one to look for, and no MCP server in this repository.
+>
+> **What is missing is a credential an MCP client can hold.** A member's access token does work in the `OPEN_NOTEBOOK_PASSWORD` slot and is correctly scoped, but it expires after one hour and the MCP server cannot refresh it: every tool then fails until someone pastes a new token and restarts the client. The operator's password is the only credential that does not expire, and giving it to an MCP client is the thing described above.
+>
+> Enabling this later needs a long-lived, revocable member token issued by this API, or refresh support in the MCP server (a [separate repository](https://github.com/Epochal-dev/open-notebook-mcp)). See [ADR-010](../7-DEVELOPMENT/decisions/ADR-010-mcp-not-offered-at-v1.md) for the full reasoning, what was measured, and what enabling it would take.
+>
+> Everything below is upstream Open Notebook's documentation, kept for reference and for whoever revisits this.
+
+---
+
 Open Notebook can be seamlessly integrated into your AI workflows using the **Model Context Protocol (MCP)**, enabling direct access to your notebooks, sources, and chat functionality from AI assistants like Claude Desktop and VS Code extensions.
 
 ## What is MCP?
@@ -83,6 +97,8 @@ Add to your VS Code settings or `.vscode/mcp.json`:
 
 - **OPEN_NOTEBOOK_URL**: URL to your Open Notebook API (default: `http://localhost:5055`)
 - **OPEN_NOTEBOOK_PASSWORD**: Optional - only needed if you've enabled password protection
+
+> **On eeroNotebook, neither line is accurate.** Authentication is never optional: every request resolves to a member or is refused. And this variable is not a password field — the MCP server copies its value straight into an `Authorization: Bearer` header, so it holds whichever credential you give it. Setting it to the operator's password signs the MCP client in *as the operator*. See the notice at the top of this page and [ADR-010](../7-DEVELOPMENT/decisions/ADR-010-mcp-not-offered-at-v1.md).
 
 ### For Remote Servers
 

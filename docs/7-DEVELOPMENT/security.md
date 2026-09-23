@@ -142,6 +142,14 @@ Never pass user-provided file paths directly to file reading or content extracti
 
 ### Authentication
 
+> **Superseded on eeroNotebook.** `PasswordAuthMiddleware` and upstream's shared-password gate no longer exist. `MemberAuthMiddleware` (`open_notebook/identity/middleware.py`) resolves **every** request to a member or refuses it, and it fails closed: there is no configuration, environment variable or unset value that turns authentication off. The operator's `OPEN_NOTEBOOK_PASSWORD` still works as a bearer credential, but it resolves to one admin *member* rather than bypassing resolution, so the access checks below apply to the operator like anyone else.
+>
+> **Access is enforced in exactly one place.** `open_notebook/domain/access.py` decides owner-or-Share; the `require_*` functions built on it are what each route depends on, and search applies the same decision inside its queries. Every interface is a client of that one point — including MCP, which is a [separately published package](https://pypi.org/project/open-notebook-mcp) with no database access and is **not offered at v1** ([ADR-010](decisions/ADR-010-mcp-not-offered-at-v1.md), [MCP page](../5-CONFIGURATION/mcp-integration.md)). If you are auditing Requirement 7.2 and looking for a second enforcement point, there isn't one, by design.
+>
+> The rest of this page's file-handling, SSRF and secrets guidance is unaffected. Other sections that still describe the shared-password model have not been revised.
+
+Upstream's model, kept for reference:
+
 Open Notebook currently uses simple password-based middleware (`PasswordAuthMiddleware`). This is suitable for single-user self-hosted deployments but should be hardened for production:
 
 - Set `OPEN_NOTEBOOK_PASSWORD` explicitly - there is no hardcoded default password; if it's unset, auth is fully disabled (all requests pass through unchecked)
