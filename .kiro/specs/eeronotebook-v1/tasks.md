@@ -25,7 +25,7 @@ Models are already installed: `qwen2.5:14b` and `nomic-embed-text` were pulled d
     - `deploy/.env.example` is the committed template
     - _Requirements: 13.7_
 
-- [ ] 2. Build the Inference Gateway
+- [x] 2. Build the Inference Gateway
   - [x] 2.1 Establish how a container reaches the inference backend
     - Verified against the live host: a container reaches `http://host.docker.internal:11434` and receives `200`, with Ollama bound to `127.0.0.1`
     - Verified the host's LAN address does not work — `10.17.8.52:11434` answers nothing, from a container or from the host itself
@@ -45,7 +45,7 @@ Models are already installed: `qwen2.5:14b` and `nomic-embed-text` were pulled d
     - `qwen2.5:14b` confirmed tool-capable, which Requirement 8.2 depends on
     - No synthesis-to-background fallback configured: a silent downgrade would weaken grounded answers with no signal
     - _Requirements: 3.3, 3.7_
-  - [-] 2.4 Verify the boundary holds
+  - [x] 2.4 Verify the boundary holds
     - Verified the app reaches chat and embedding routes through the gateway alone, and that responses carry the logical name (`model=eero-synthesis`) rather than the backend model
     - Verified no host address or model server address appears in the app container's environment
     - Container healthcheck in place; the Uptime Kuma monitor is task 4.2
@@ -54,6 +54,15 @@ Models are already installed: `qwen2.5:14b` and `nomic-embed-text` were pulled d
     - Fixed by reporting a failed `embed_source` job as a failed Source, which lands in upstream's existing failed-source UI and needs no frontend change; suppressed once the Source has embeddings, so a successful retry clears it
     - Configuration could not carry this — both embedding paths are fire-and-forget — so it is the first application code change, arriving before task 3.4's unmodified-upstream checkpoint
     - The report appears when the embed job exhausts its five retries, roughly a minute, rather than on first failure
+    - **Closed out against the live deployment; everything above still holds.** The findings from here up are the earlier session's and were re-checked rather than restated. The fix is committed as `2fef1cf` and is still the most recent change to `api/routers/sources.py` and `open_notebook/domain/notebook.py`, so nothing since has overwritten it, and it is present in the running image. `tests/test_source_embedding_failure_visibility.py` pins it with 12 checks: the reporting rule itself, all three endpoints a member sees, extraction failure taking precedence, and a stale failure cleared once embedded
+    - Requirement 3.8 re-verified on both sides of the boundary. The app service in `deploy/docker-compose.yml` names no host and no model server address, and neither does the running container's environment — no `host.docker.internal`, no `10.17.8.52`, no `:11434`, no `OLLAMA_*` — and its `ExtraHosts` is empty, so the application has no route to the host even if something were misconfigured. Its other source of addresses is the stored credential, which reads `http://eeronotebook-inference:4000/v1`; the three registered models are the logical names only, with no backend model name anywhere in the application
+    - **Requirement 3.8 is now held by a test rather than by a hand check.** `tests/test_inference_boundary_config.py` reads the compose project and fails if the app service names a host or model server address, if it declares `extra_hosts`, or if any service other than the gateway addresses the backend — plus one check that the gateway *does*, so the other three cannot pass vacuously. Verified it bites: adding `OLLAMA_API_BASE: http://host.docker.internal:11434` to the app service fails two of them by name. The tempting fix for an inference problem is to point the application straight at the model server, and that is the edit this catches
+    - Boundary re-verified end to end: the application's own model tests reach both routes through the gateway (chat answered, embeddings 768 dimensions), and gateway responses still carry the logical names — `model=eero-synthesis`, `model=eero-embed` — rather than `qwen2.5:14b` or `nomic-embed-text`. An unauthenticated `/v1/models` from the app container still answers `401`
+    - **The embed-failure report re-verified against real rows, with the gateway left running.** A throwaway Source carrying a failed `embed_source` record of the shape the real fault produces read `failed` on all three surfaces — detail, `/status` and the list — each naming `eero-embed`; embedding it for real then cleared the report, so the suppression branch works against live data and not only against mocks. That exercised the SurrealQL the unit tests mock out, which is the half that could have silently matched nothing. Everything created was deleted: sources, embeddings and notebooks are back to 0 and the queue back to 57 completed / 16 failed. Two of those 16 are genuine `embed_source` failures carrying the gateway-unreachable message, from before the fix
+    - **Not re-verified, deliberately:** the chat `502` and vector search `500` measured with the gateway stopped. Stopping it now would take the application down on a shared host and alarm the monitor, to reproduce a result already recorded. The mechanism is consistent with those two numbers and readable in the code — graph nodes classify an unreachable backend through `classify_error`, `api/main.py` answers `NetworkError` and `ExternalServiceError` as 502, and `api/routers/search.py` wraps its own failure as `500 Search failed: …` before a handler can map it, which is why search was the odd number. `tests/test_search_api.py` covers the vector path raising rather than returning an empty result, which is the silent degradation 3.5 forbids
+    - Requirement 13.10 confirmed, not rebuilt: Kuma monitor 23, `eeroNotebook Inference Gateway`, probes `http://eeronotebook-inference:4000/health/liveliness` by keyword every 60 s and its latest heartbeat is up (`200 - OK, keyword is found`), with the stack group reporting all children up. The container healthcheck is healthy, and the gateway is still unpublished while sitting on `monitoring_net`, so task 4.2's added reachability still grants nothing
+    - Noticed while checking: the queue holds no `new` and no `running` records even though `eeronotebook-db` had restarted five hours earlier — the condition that silenced the worker in task 3.4. One observation, not a test of the watchdog, but the failure it exists for was not present
+    - Gates: `uv run pytest tests/` 727 passed / 18 skipped — 723 as of task 5.6 plus the four new boundary checks — with `uv run ruff check .` and `uv run python -m mypy .` clean across 145 source files
     - _Requirements: 3.5, 3.8, 13.10_
 
 - [x] 3. Deploy the stack, unmodified
@@ -208,26 +217,41 @@ Models are already installed: `qwen2.5:14b` and `nomic-embed-text` were pulled d
     - Every new string through `t('...')`, with keys added to all locales under `frontend/src/lib/locales/`; en-US is the reference and a missing key fails `tsc`
     - `npm run lint`, `npm run test`, `npm run build`
     - _Requirements: 4.1, 4.5_
-  - [x]* 5.5 Test the Identity_Boundary
+  - [x] 5.5 Test the Identity_Boundary
     - Delivered with 5.2 rather than after it: `tests/test_identity_boundary.py` covers a valid token resolving to a member, and expired, wrong-signature, malformed, wrong-audience, wrong-issuer, missing-subject, `alg: none` and absent tokens each refused. All raise `AuthenticationError`, which `api/main.py`'s existing handler answers as 401
     - A stub provider satisfying the protocol resolves through the same seam with no change to the seam, and `IdentityProvider` is `runtime_checkable` so that is asserted mechanically rather than by inspection
     - A missing secret raises `ConfigurationError`, not `AuthenticationError`: nobody's credentials are wrong, the deployment is, and failing loudly beats verifying every token against an empty key
     - 18 tests. Optional in the plan, written anyway — the boundary's whole value is that it refuses things, and an unrefused token is invisible until it matters
     - _Requirements: 4.2, 4.3, 4.4, 4.5_
-  - [ ] 5.6 Checkpoint — identity
-    - Ensure all tests pass, ask the user if questions arise.
-    - `uv run pytest tests/`, `ruff check . --fix`, `uv run python -m mypy .`, and the frontend's `npm run lint && npm run test && npm run build`
+  - [x] 5.6 Checkpoint — identity
+    - All six gates green: `uv run pytest tests/` 723 passed / 18 skipped, `ruff check .` clean, `mypy` clean across 144 source files, and the frontend's `npm run lint` (0 errors, the same 7 pre-existing warnings), `npm run test` 140 passed / 23 files, `npm run build` clean
+    - `ruff` is not on `PATH` as a bare command in this environment; it runs as `uv run ruff check .`
+    - **Also verified against the live deployment, which the checkpoint does not require but a demo does.** All five containers healthy; `tests/integration/test_baseline.py` ran 17/17 twice against `http://10.17.8.52:5055` — ingestion of all three Source kinds, embeddings, vector search, citations that resolve, refusal of an uncovered question, and cascade delete. So identity did not break the baseline that task 3.4 established
+    - The two runs took 8m01s and 10m12s against 3.4's ~4m15s, and the cause is contention, not regression: they **overlapped**, and `OPEN_NOTEBOOK_WORKER_MAX_TASKS=1` serialises every ingestion in the deployment behind one worker. Worth knowing before several people upload at once
+    - `member` was empty at the start of this check while GoTrue still held all three beta members, and that asymmetry is by design — `Member.resolve` recreates the local row on first sign-in, so the identity store is self-healing where the provider's user list is not. The admin password resolved to a fresh `member` row on the first authenticated call
+    - The deployed checkout sits one commit behind `origin/eero` (`b658bf1` against `6e261a6`), and that commit touches only `tasks.md`, so the running code is current
+    - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5_
 
 - [ ] 6. Ownership and sharing
-  - [~] 6.1 Add owner scope to the data model
-    - Owner reference on Notebooks; Sources, notes, and Study_Artifacts inherit Notebook access
-    - Migrate content created during tasks 3–4 to a named Notebook owner rather than leaving it unscoped
-    - Migration `25.surrealql` plus `25_down.surrealql`, and the matching entry in `AsyncMigrationManager` — migrations are hard-coded, not discovered, so a new file alone does nothing. **Renumbered from 24:** task 5.2 took 24 for the `member` table, and migrations are sequential
-    - Owner is a `record<member>` reference, so ownership points at the local identity from 5.2 and never at a provider's user id
-    - Add `owner` to the `Notebook` model in `open_notebook/domain/notebook.py`; Sources, notes and Study_Artifacts carry no owner of their own and inherit through the existing `reference` and `artifact` relations
-    - Define the `share` relation in the same migration, so 6.2 can enforce owner-or-Share from the outset instead of being rewritten by 6.3
-    - The migration must leave both an empty database and the populated one on the Dev Server valid; the up path runs automatically on API startup, so a failure there stops the app
-    - Take a backup before the first run, and confirm the down migration on a scratch database rather than on live data
+  - [-] 6.1 Add owner scope to the data model
+    - Migration `25.surrealql` and `25_down.surrealql`, registered in `AsyncMigrationManager` at index 24 of both lists. `owner` on `notebook` is `option<record<member>>` with an index, plus the `share` relation, defined here rather than in 6.3 so 6.2 can enforce owner-or-Share from the outset. **Renumbered from 24** (5.2 took it), and taking 25 pushed 7.1 to 26 and 8.1 to 27 — both task bodies updated, since `tasks.md` had assigned 25 to 6.1 *and* 7.1
+    - `owner` lives on `notebook` and nowhere else. Sources, notes and Study_Artifacts carry none of their own and inherit through the existing `reference` and `artifact` relations. One owner field is one place for an access check to consult; four would be four things to keep in agreement across an upstream merge, and a test asserts no second table gains one
+    - **`owner` is optional, and that is a concession with a named cost.** A required field is the stronger guarantee — an unowned Notebook becomes unrepresentable — but SurrealDB does not rewrite existing rows when a field is defined: every Notebook predating the migration would become unwritable on its next UPDATE, and Notebook creation would fail outright until 6.2 wires an owner into the create path. The up path runs on API startup, so that is an app that will not boot. Optional instead, with the rule that `owner = NONE` means reachable by **nobody**. The dangerous reading of "inherit" is the opposite one, and `tests/test_owner_scope.py` exists to keep it from being written
+    - Safe because `repo_update` issues `UPDATE $target MERGE $data`, not a replace, so `_prepare_save_data` dropping a `None` owner leaves the stored value alone. Were it a replace, renaming a Notebook would silently unown it — and an unowned Notebook is invisible to everyone. Pinned by a test, because it is a property of the repository layer that this design leans on rather than anything visible in the model
+    - `role` on `share` is `ASSERT $value = 'viewer'`. That is Requirement 6.6 met structurally rather than by policy: there is no role to widen to, and a second one cannot exist without passing the ASSERT and a schema migration. A UNIQUE index on `(in, out)` gives one Share per member per Notebook — two would make revocation partial, deleting one while the other still granted access
+    - Cascade events delete a Share when its Notebook or its member goes, at the database rather than in a route, so no delete path can forget. Verified: the share count went 1 → 0 on a notebook delete
+    - **Verified up and down on a scratch SurrealDB 2.6.5 running the real `AsyncMigrationManager`, not a hand-written approximation of it** — 45 checks across an empty database and a populated one, all green. The populated case reproduced both carried findings: four orphaned Sources (3.4) and an *empty* `member` table (5.6). Down reverses the schema, destroys no content, and up runs again afterwards without wedging
+    - Four SurrealQL behaviours the migration depends on were measured rather than assumed, and each could have broken it silently: `DEFINE FIELD` followed by an `UPDATE` using that field **does** work in one migration query; `WHERE owner IS NONE` **does** match rows created before the field existed; `IF … THEN … ELSE … END` works as a `LET` expression; and `array::first([])` is `NONE`. Also worth knowing for the next schema test: `INFO FOR DB` renders `FROM member TO notebook` back as `IN member OUT notebook`, which failed an assertion of mine that was wrong about the schema rather than the schema being wrong
+    - **Requirement 7.5's owner is the admin member, created by the migration when it is absent.** 5.6's finding makes this necessary rather than tidy: `member` can be empty while the provider holds accounts, because `Member.resolve` recreates the local row on first sign-in, so the migration cannot assume an owner exists to point at. It creates `admin-password`/`operator` — the identity the shared password resolves to, and the honest answer to "who made this", since everything predating task 5 was created by whoever held that password. `Member.resolve` finds it by (provider, subject) afterwards and reuses it; migration 24's UNIQUE index makes a second one impossible. A test asserts the migration's literals match `ADMIN_PROVIDER` and `ADMIN_SUBJECT`, because if they drift the content is assigned to an identity nobody can sign in as and 7.5 is met in name only
+    - Created **only when there is something to assign**, so installing from scratch manufactures no phantom owner — confirmed: 0 members and 0 notebooks after the migration on an empty database. The backfill `UPDATE` is guarded on `$admin != NONE` so it can never write a null over an owner, and there is no silent path: if the admin were needed and could not be created, the CREATE fails and the migration fails with it
+    - **The orphaned Sources from 3.4: fail-closed, and the decision is to adopt them rather than delete or ignore them.** For access they are already fail-closed — an orphan resolves to no Notebook, so no check can grant it, and it is not a disclosure. The problem is at the other end: once 6.2 scopes every route through a Notebook, orphaned content can never be read or deleted through the application again, so leaving it means storage nobody can reach and nobody can clear. So the migration collects orphaned Sources *and* notes into one `Recovered content (migration 25)` Notebook owned by the admin. That **narrows** access — from anyone holding the shared password to the admin alone — and leaves the content visible enough for an operator to review. Deleting them was the alternative and was rejected: a migration that destroys content on startup is not a failure anyone can undo. The Notebook is created only when there is something to put in it, and a test forbids `DELETE source` / `DELETE note` appearing in the file
+    - **Orphaning is ongoing, not historical, and that is the more useful half of 3.4's finding.** Measured directly: deleting a `notebook` record makes SurrealDB delete the `reference` and `artifact` edges itself while **keeping** the Source. So `Notebook.delete()` did not forget to clean up — its default `delete_exclusive_sources=False` deliberately keeps Sources, because upstream treats a Source as library content that may live in zero Notebooks. Migration 25 is therefore a one-time sweep and cannot prevent the next one. **For 6.2:** either deleting a Notebook takes its exclusive Sources with it, or orphans need a home, but the current default quietly produces unreachable content on every delete. This also explains 3.4's confusion about why its own cascade check passed while a hand-made Notebook left four Sources behind — the two paths differ in that flag
+    - Notes are handled alongside Sources because `SourceInsight.save_as_note()` takes `notebook_id=None`, so a note with no Notebook is a reachable state and not corruption
+    - Also found, recorded and deliberately **not** fixed: `ensure_record_id` is not idempotent for a numerically-keyed id — `member:9999` → `member:⟨9999⟩` → `member:⟨⟨9999\⟩⟩`, so such an owner would point somewhere new on every save. SurrealDB issues twenty-character alphanumeric keys, so an all-digit one is theoretical; the consequence is an owner pointing at a nonexistent record, which fails closed; and `ensure_record_id` is shared with every record link in the codebase, so changing it is its own task. Pinned by a test that fails if the escaping ever widens to the ids actually issued
+    - `tests/test_owner_scope.py`, 32 checks over the schema text and the model field. Mutation-checked rather than assumed: widening `role` to include `editor`, dropping the `$admin != NONE` guard, and swapping orphan adoption for `DELETE source` each fail exactly the test meant to catch them. One check covers all 50 migration files rather than only 25 — `AsyncMigration.from_file` joins every line into one, so a comment after SQL on the same line would comment out every statement that follows, and nothing else would report it
+    - Gates: `uv run pytest tests/` **759 passed / 18 skipped** (727 as of 2.4, plus these 32), `uv run ruff check .` clean, `uv run python -m mypy .` clean across 146 source files
+    - **Not applied to the Dev Server, and not verifiable from here.** `ssh` to the host is refused (publickey), so `deploy/backup/backup.sh` — which needs docker access to the `eeronotebook_db_data` volume — cannot run, and the live migration must not precede the backup. The API answers `/health` 200 but `/api/notebooks` 401, and `deploy/.env` is gitignored and absent from this workspace, so the live notebook, Source and note counts were **not** confirmed either: 2.4's "back to 0" is carried forward unverified rather than re-measured. Requirement 13.2 does still hold — the Dev Server's SurrealDB is unpublished, and the `200` on port 8000 is `labplatform-app` (uvicorn, no `/version`), not the database
+    - **Left to the operator, in this order:** run `deploy/backup/backup.sh` on the host and confirm three artifacts plus a `MANIFEST`; update the host checkout and restart `eeronotebook-app`; watch the startup log for the version moving 24 → 25, because a failed up path stops the app. Then check whether a `Recovered content (migration 25)` Notebook appeared — if one did, the orphan sweep found pre-task-5 content that 2.4's counts said was gone, and what is inside it is worth reading before deleting. Do **not** reach for `restore.sh --production` casually; it has still never been run against live data
     - _Requirements: 5.1, 5.2, 5.3, 7.5_
   - [~] 6.2 Enforce ownership on every REST route
     - No Notebook, Source, note, or search result may be reachable outside the resolved member's access
@@ -246,36 +270,36 @@ Models are already installed: `qwen2.5:14b` and `nomic-embed-text` were pulled d
     - Revocation deletes the relation and takes effect on the next request, leaving the Notebook's contents untouched
     - Share management in the Notebook UI under `frontend/src/components/notebooks/`, with i18n keys in every locale
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.6_
-  - [ ] 6.4 Scope search and stop disclosing existence
+  - [~] 6.4 Scope search and stop disclosing existence
     - `text_search` and `vector_search` in `open_notebook/domain/notebook.py` take the resolved member and filter inside the SurrealQL, not after it — filtering the result set in Python still leaks counts and scores
     - `POST /api/search` and the ask graph pass the member through; the graph nodes are sync and reach async code through the existing event-loop workaround, so follow `chat.py`'s pattern exactly rather than inventing a second one
     - A Notebook the member cannot reach returns 404 rather than 403, on every route that addresses one by id, so the response does not confirm it exists
     - Same for Sources, notes and Study_Artifacts addressed directly by id
     - _Requirements: 7.3, 7.4_
-  - [ ] 6.5 Build the access enforcement suite
+  - [~] 6.5 Build the access enforcement suite
     - `tests/test_access_enforcement.py`, parameterised over the registered route table, so a route added later without scoping fails a test instead of passing unnoticed
     - Cover: a member with no access gets 401 or 404 and never content; a Viewer's writes are refused; a revoked Share ends access; search excludes inaccessible material; existence is not disclosed
     - Deliberately not marked optional. Requirement 14.4 re-runs this after every upstream merge, and the design names access enforcement the highest-consequence divergence — an optional suite would be skipped exactly when it matters
     - _Requirements: 7.1, 7.3, 7.4, 5.4, 5.5, 6.4, 6.5_
-  - [ ] 6.6 Settle the MCP interface
+  - [~] 6.6 Settle the MCP interface
     - There is no MCP server in this repository. `open-notebook-mcp` is a separate package documented in `docs/5-CONFIGURATION/mcp-integration.md`; it holds no database access and reaches the API over HTTP, so it inherits whatever 6.2 and 6.4 enforce rather than enforcing anything itself
     - Confirm that rather than assume it: check its published tool list against the scoped routes, then point it at the deployed API as a member with no access and assert it returns nothing
     - It authenticates with `OPEN_NOTEBOOK_PASSWORD`, which 5.3 removes. Either give an MCP client a way to hold a member token, or record that the interface is unavailable at v1 — leaving it half-configured is the outcome to avoid
     - Write the conclusion into `docs/`, since a reader who finds Requirement 7.2 will otherwise look for a second enforcement point in this codebase and not find one
     - _Requirements: 7.2_
-  - [ ] 6.7 Checkpoint — access control
+  - [~] 6.7 Checkpoint — access control
     - Ensure all tests pass, ask the user if questions arise.
     - 6.5's suite must be green before task 8 adds a new category of Notebook-owned data
 
 - [ ] 7. Study progress
   - [~] 7.1 Model Study_Progress per member
     - Flashcard scheduling state and quiz attempts keyed to member and Study_Artifact, stored separately from the artifact
-    - Migration `25.surrealql` and its down file, plus the `AsyncMigrationManager` entry
+    - Migration `26.surrealql` and its down file, plus the `AsyncMigrationManager` entry. **Renumbered from 25:** task 6.1 took 25 for owner scope and the `share` relation, and migrations are sequential
     - Domain model in a new `open_notebook/domain/study.py`; every read and write filters on the resolved member, with no code path that takes a member id from the request body
     - Deleting a Share leaves progress rows untouched; deleting the artifact is the only thing that removes them **(\*)**
     - No endpoint returns another member's progress, and none exposes an aggregate across members — an average over a class of two identifies both **(\*)**
     - _Requirements: 9.3, 9.4, 10.2, 10.4_
-  - [ ]* 7.2 Test progress isolation
+  - [~] 7.2 Test progress isolation
     - Two members on one shared artifact: each sees only their own state, and one member's review does not change the other's next due card
     - Revoking a Share leaves the revoked member's rows present, and readable again if access is restored
     - _Requirements: 9.3, 9.4, 10.2, 10.4_
@@ -285,7 +309,7 @@ Models are already installed: `qwen2.5:14b` and `nomic-embed-text` were pulled d
     - Generate against `qwen2.5:14b` using tool calling to constrain output to a schema; do not parse free text
     - Validate every response against the schema, retry on failure, and never persist an invalid artifact
     - Record the Sources each Study_Artifact was generated from
-    - Migration `26.surrealql` and its down file for `study_artifact`, plus the `AsyncMigrationManager` entry; the record holds its Notebook, its type, the Sources it came from, and the validated payload
+    - Migration `27.surrealql` and its down file for `study_artifact`, plus the `AsyncMigrationManager` entry; the record holds its Notebook, its type, the Sources it came from, and the validated payload. **Renumbered from 26:** 6.1 took 25 and 7.1 took 26, and migrations are sequential
     - Reach the model through `provision_langchain_model()` like every other LLM call, never a provider client directly, and bind a Pydantic schema as a tool. The gateway serves the logical name `eero-synthesis`, so nothing here names `qwen2.5:14b`
     - Validation is not a separable step from persistence: the schema check is the decision to write. Raise `ValueError` for a permanent failure so the `stop_on` blocklist in `commands/` stops retrying, and anything else to let it retry
     - Run generation as a background command in `commands/study_commands.py`, submitted fire-and-forget; the worker must be running or nothing happens and nothing complains
@@ -315,16 +339,16 @@ Models are already installed: `qwen2.5:14b` and `nomic-embed-text` were pulled d
     - Templates go under `prompts/transformation/` and are registered as transformations; retention as notes is upstream behaviour already
     - Templates are cached, so restart the app after editing one
     - _Requirements: 12.1, 12.2, 12.3, 14.3_
-  - [ ] 8.6 Regenerate an artifact after its Sources change
+  - [~] 8.6 Regenerate an artifact after its Sources change
     - Owner-only route that regenerates in place and records the new Source set
     - Decide what happens to Study_Progress: a card that no longer exists cannot keep a schedule, and quietly discarding a member's history would be the wrong default. Implement the choice and record it
     - _Requirements: 8.5_
-  - [ ]* 8.7 Test schema validation and retry
+  - [~] 8.7 Test schema validation and retry
     - For a response that fails validation, nothing is persisted and the job retries; this is the structured-output risk the design's Risks table names
     - A response that never validates ends as a failed job carrying a reason, not as a silent absence
     - The Sources recorded on an artifact are the Sources fed into it
     - _Requirements: 8.2, 8.3, 8.4_
-  - [ ] 8.8 Checkpoint — study artifacts
+  - [~] 8.8 Checkpoint — study artifacts
     - Ensure all tests pass, ask the user if questions arise.
     - Re-run 6.5's suite: task 8 added a new category of Notebook-owned data, and every new route is a new place for access to leak
 

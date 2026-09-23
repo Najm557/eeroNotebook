@@ -20,12 +20,54 @@ class Notebook(ObjectModel):
     archived: Optional[bool] = False
     last_viewed_at: Optional[datetime] = None
 
+    # The member who owns this Notebook (migration 25). This is the only owner
+    # reference in the data model: Sources, notes and Study_Artifacts carry none
+    # of their own and inherit access through the `reference` and `artifact`
+    # relations.
+    #
+    # Held as a string rather than a Member, matching how `Source.command` holds
+    # a record link, so loading a Notebook stays one query.
+    #
+    # Optional because migration 25 cannot make it required without breaking
+    # every Notebook that predates it; see that file for the reasoning. An owner
+    # of None means *nobody* can reach this Notebook, never everybody - task
+    # 6.2's access check must fail closed on it.
+    owner: Optional[str] = None
+
     @field_validator("name")
     @classmethod
     def name_must_not_be_empty(cls, v):
         if not v.strip():
             raise InvalidInputError("Notebook name cannot be empty")
         return v
+
+    @field_validator("owner", mode="before")
+    @classmethod
+    def parse_owner(cls, value):
+        """Accept the RecordID SurrealDB returns as well as a plain string."""
+        if value is None:
+            return None
+        if isinstance(value, RecordID):
+            return str(value)
+        return str(value) if value else None
+
+    def _prepare_save_data(self) -> Dict[str, Any]:
+        """Write `owner` as a record link, not as the string the model holds.
+
+        `owner` is typed `record<member>` in the schema, and SurrealDB does not
+        coerce a string into one - it refuses the write. The model carries a
+        string because that is what an access check compares against.
+
+        When `owner` is None it is dropped here, as every other optional field
+        is, and that is safe rather than lossy: `repo_update` issues
+        `UPDATE $target MERGE $data`, so an absent key leaves the stored value
+        alone. Renaming a Notebook therefore cannot silently unown it - which is
+        the failure this would otherwise be.
+        """
+        data = super()._prepare_save_data()
+        if data.get("owner") is not None:
+            data["owner"] = ensure_record_id(data["owner"])
+        return data
 
     async def get_sources(self, include_full_text: bool = False) -> List["Source"]:
         try:

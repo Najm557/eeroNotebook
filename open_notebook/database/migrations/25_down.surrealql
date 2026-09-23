@@ -1,0 +1,26 @@
+-- Reverse migration 25.
+--
+-- Schema only. The data migration is deliberately not reversed, and that is a
+-- choice rather than an omission:
+--
+-- - The recovery Notebook is left in place. Deleting it would destroy whatever
+--   an operator has since added to it, and the Sources inside it were already
+--   stranded once.
+-- - Owner values are left on their rows. With the field definition gone they are
+--   inert, and re-running the up path finds them still present and does not
+--   reassign them.
+-- - The admin `member` row is left alone. It belongs to migration 24, and an
+--   operator may be signed in against it. Rolling back past this point is
+--   migration 24's business.
+--
+-- Order matters: the index and the events reference the table, so they go first.
+-- The events are removed before the table so that dropping `share` cannot fire
+-- a cleanup against a table that is halfway gone.
+
+REMOVE EVENT IF EXISTS share_cleanup_on_member_delete ON TABLE member;
+REMOVE EVENT IF EXISTS share_cleanup_on_notebook_delete ON TABLE notebook;
+REMOVE INDEX IF EXISTS share_member_notebook ON TABLE share;
+REMOVE TABLE IF EXISTS share;
+
+REMOVE INDEX IF EXISTS notebook_owner ON TABLE notebook;
+REMOVE FIELD IF EXISTS owner ON TABLE notebook;

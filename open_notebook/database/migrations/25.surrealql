@@ -1,0 +1,125 @@
+-- Migration 25: owner scope on Notebooks, and the Share relation.
+--
+-- Requirements 5.1, 5.2, 5.3, 7.5.
+--
+-- Upstream Open Notebook has no notion of who owns anything: every Notebook was
+-- reachable by anyone holding the shared password. This migration adds the one
+-- reference the whole access model hangs off, and the relation that grants
+-- access to somebody else.
+--
+-- Three deliberate shapes here, each of which could reasonably have been done
+-- another way:
+--
+-- 1. Ownership lives on `notebook` and nowhere else. Sources, notes and (from
+--    task 8) Study_Artifacts carry no owner of their own and inherit through the
+--    existing `reference` and `artifact` relations. One owner field means one
+--    place for an access check to consult; an owner column on each table would
+--    be four places to keep in agreement, and on an upstream merge they would
+--    drift apart.
+--
+-- 2. `owner` points at `member`, never at a provider's user id, so replacing the
+--    identity provider rewrites `member.provider` and `member.subject` and
+--    touches no ownership at all (ADR 0003).
+--
+-- 3. `owner` is `option<record<member>>` rather than a required field, and that
+--    is a decision with a cost. A required field would make an unowned Notebook
+--    unrepresentable, which is the stronger guarantee, but SurrealDB does not
+--    rewrite existing rows when a field is defined: every Notebook predating
+--    this migration would become unwritable on its next UPDATE, and Notebook
+--    creation would fail outright until task 6.2 wires an owner into the create
+--    path. The up path runs automatically on API startup, so that failure would
+--    stop the app. Optional instead, with the access rule fail-closed: task 6.2
+--    must treat `owner = NONE` as reachable by nobody. The dangerous reading of
+--    "inherit" is the opposite one - a missing owner meaning unrestricted - and
+--    tests/test_owner_scope.py exists to keep that from being written.
+
+-- Indexed because task 6.2's hot path is "which Notebooks does this member
+-- own", run on every list request; without it that is a full table scan.
+DEFINE FIELD IF NOT EXISTS owner ON TABLE notebook TYPE option<record<member>>;
+DEFINE INDEX IF NOT EXISTS notebook_owner ON TABLE notebook FIELDS owner;
+
+-- The Share relation, defined here rather than in task 6.3 so that 6.2 can
+-- enforce owner-or-Share from the outset instead of being rewritten once
+-- sharing arrives.
+--
+-- Direction is member -> notebook because the security-critical query is
+-- member-first: "what may this person reach" is asked on every request, where
+-- "who can reach this Notebook" is asked only by an owner managing shares.
+--
+-- `role` is constrained to exactly one value. That is how Requirement 6.6 - no
+-- action makes a Notebook visible to the team at large - is met structurally
+-- rather than by policy: there is no role to widen to, and a second role would
+-- have to pass through this ASSERT and a schema migration to exist.
+DEFINE TABLE IF NOT EXISTS share TYPE RELATION FROM member TO notebook SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS role ON TABLE share TYPE string DEFAULT 'viewer' ASSERT $value = 'viewer';
+DEFINE FIELD IF NOT EXISTS created ON TABLE share TYPE datetime DEFAULT time::now();
+
+-- One Share per member per Notebook, enforced by the database. Two Shares for
+-- the same pair would make revocation partial: deleting one would read as
+-- success while the other still granted access.
+DEFINE INDEX IF NOT EXISTS share_member_notebook ON TABLE share FIELDS in, out UNIQUE;
+
+-- A Share outliving the Notebook or the member it refers to would leave an
+-- access grant pointing at nothing, which is the same class of defect as the
+-- orphaned Sources found in task 3.4. Cleaned up at the database rather than in
+-- application code so no delete path can forget.
+DEFINE EVENT IF NOT EXISTS share_cleanup_on_notebook_delete ON TABLE notebook WHEN ($after == NONE) THEN { DELETE share WHERE out = $before.id; };
+DEFINE EVENT IF NOT EXISTS share_cleanup_on_member_delete ON TABLE member WHEN ($after == NONE) THEN { DELETE share WHERE in = $before.id; };
+
+-- Requirement 7.5: content created before member authentication existed is
+-- assigned a named owner rather than left unscoped.
+--
+-- The owner is the admin member - the identity the shared instance password
+-- resolves to (open_notebook/identity/admin.py, provider `admin-password`,
+-- subject `operator`). That is the honest answer to "who made this": everything
+-- predating task 5 was created by whoever held that password.
+--
+-- The `member` table cannot be assumed populated. Task 5.6 observed it empty
+-- while the identity provider held three members, because `Member.resolve`
+-- recreates the local row on first sign-in. So this creates the admin row when
+-- it is absent and there is something to assign - and only then, so a fresh
+-- database gains no phantom identity. `Member.resolve` finds it by (provider,
+-- subject) afterwards and reuses it, and the UNIQUE index from migration 24
+-- makes creating a second one impossible.
+LET $unowned_notebooks = (SELECT VALUE id FROM notebook WHERE owner IS NONE);
+
+-- Orphans: a Source with no `reference` edge, or a note with no `artifact` edge.
+-- Both are reachable states in upstream, not corruption. `Notebook.delete()`
+-- defaults to `delete_exclusive_sources=False`, which deletes the edges and
+-- keeps the Sources, and `SourceInsight.save_as_note()` accepts no notebook at
+-- all. Task 3.4 hit the first of those and found four stranded Sources.
+--
+-- Under inheritance an orphan resolves to no Notebook, so no access check can
+-- grant it: fail-closed, not a disclosure. The problem is the other end -
+-- once task 6.2 scopes every route through a Notebook, orphaned content can
+-- never be read or deleted through the application again. Leaving it would mean
+-- storage nobody can reach and nobody can clear.
+--
+-- So orphans are adopted into one recovery Notebook owned by the admin. This
+-- narrows access rather than widening it - from anyone holding the shared
+-- password to the admin alone - and leaves the content visible enough that an
+-- operator can look at it and decide. Deleting it here was the alternative and
+-- was rejected: a migration that destroys content on startup is not a failure
+-- anyone can undo. The Notebook is created only when there is something to put
+-- in it.
+LET $orphan_sources = (SELECT VALUE id FROM source WHERE array::len(->reference) == 0);
+LET $orphan_notes = (SELECT VALUE id FROM note WHERE array::len(->artifact) == 0);
+
+LET $pre_existing = array::len($unowned_notebooks) + array::len($orphan_sources) + array::len($orphan_notes);
+LET $existing_admin = (SELECT VALUE id FROM member WHERE provider = 'admin-password' AND subject = 'operator' LIMIT 1);
+LET $new_admin = IF $pre_existing > 0 AND array::len($existing_admin) == 0 THEN (CREATE member SET provider = 'admin-password', subject = 'operator' RETURN VALUE id) ELSE [] END;
+LET $admin = array::first(array::concat($existing_admin, $new_admin));
+
+-- Guarded on $admin so this can never write NONE over an owner. When there is
+-- no pre-existing content $admin is NONE, the WHERE matches nothing, and the
+-- statement is a no-op - which is the case on an empty database. There is no
+-- path where content stays unowned silently: if the admin were needed and could
+-- not be created, the CREATE above fails and the migration fails with it.
+UPDATE notebook SET owner = $admin WHERE owner IS NONE AND $admin != NONE;
+
+LET $orphan_count = array::len($orphan_sources) + array::len($orphan_notes);
+LET $recovery = IF $orphan_count > 0 THEN array::first((CREATE notebook SET name = 'Recovered content (migration 25)', description = 'Sources and notes that belonged to no Notebook when per-member ownership was introduced. They were unreachable by any access check, so they were collected here under the operator account rather than deleted. Review and delete what is not wanted.', owner = $admin RETURN VALUE id)) ELSE NONE END;
+
+-- Computed before the recovery Notebook existed, so it cannot adopt itself.
+FOR $orphan IN $orphan_sources { RELATE $orphan->reference->$recovery; };
+FOR $orphan IN $orphan_notes { RELATE $orphan->artifact->$recovery; };
