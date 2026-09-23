@@ -39,6 +39,13 @@ interface SessionManagerProps {
   onUpdateSession: (sessionId: string, title: string) => void
   onDeleteSession: (sessionId: string) => void
   loadingSessions: boolean
+  /**
+   * Whether the caller may rename or delete a session. Creating and selecting one
+   * needs only read access — asking questions is explicitly a Viewer's right
+   * (Requirement 6.3) — but renaming or deleting somebody else's session is a
+   * write the API refuses (spec task 6.2), so a Viewer is offered neither.
+   */
+  canEdit?: boolean
 }
 
 export function SessionManager({
@@ -48,7 +55,8 @@ export function SessionManager({
   onSelectSession,
   onUpdateSession,
   onDeleteSession,
-  loadingSessions
+  loadingSessions,
+  canEdit = true
 }: SessionManagerProps) {
   const { t, language } = useTranslation()
   const [isCreating, setIsCreating] = useState(false)
@@ -203,6 +211,7 @@ export function SessionManager({
                           <h4 className="font-medium text-sm">
                             {session.title}
                           </h4>
+                          {canEdit && (
                           <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
                             <Button
                               size="sm"
@@ -221,6 +230,7 @@ export function SessionManager({
                               <Trash2 className="h-3 w-3" />
                             </Button>
                           </div>
+                          )}
                         </div>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                           <Clock className="h-3 w-3" />

@@ -29,9 +29,15 @@ class TestNoteCreation:
         mock_note.add_to_notebook = AsyncMock()
         mock_note_cls.return_value = mock_note
 
+        # notebook_id is required since spec task 6.2: a note in no notebook
+        # inherits access from nothing, so nobody could read or delete it.
         response = client.post(
             "/api/notes",
-            json={"content": "Some content", "note_type": "human"},
+            json={
+                "content": "Some content",
+                "note_type": "human",
+                "notebook_id": "notebook:abc",
+            },
         )
 
         assert response.status_code == 200
@@ -55,9 +61,15 @@ class TestNoteCreation:
         mock_note.add_to_notebook = AsyncMock()
         mock_note_cls.return_value = mock_note
 
+        # notebook_id is required since spec task 6.2: a note in no notebook
+        # inherits access from nothing, so nobody could read or delete it.
         response = client.post(
             "/api/notes",
-            json={"content": "Some content", "note_type": "human"},
+            json={
+                "content": "Some content",
+                "note_type": "human",
+                "notebook_id": "notebook:abc",
+            },
         )
 
         assert response.status_code == 200

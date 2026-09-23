@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from open_notebook.ai.provision import provision_langchain_model
+from open_notebook.domain.member import Member
 from open_notebook.domain.notebook import vector_search
 from open_notebook.exceptions import OpenNotebookError
 from open_notebook.utils import clean_thinking_content
@@ -48,8 +49,42 @@ class ThreadState(TypedDict):
     final_answer: str
 
 
+def _asking_member(config: RunnableConfig) -> Member:
+    """The member this run is answering for, or refuse to run.
+
+    Carried in `configurable` alongside the three model ids, which is how this
+    graph already receives everything the caller supplies that is not the
+    question itself. Config propagates to nodes dispatched with `Send`, so
+    `trigger_queries` has nothing to copy and a search node added later cannot
+    forget to.
+
+    Refusing on absence is the point. Requirement 2.4 says no Grounded_Answer
+    draws on another Notebook's Sources, and the failure mode of a missing member
+    is a *wider* search whose only symptom is a better-looking answer. Nothing
+    about that is visible in the output, so it has to stop the run.
+
+    Note for anyone reaching for the `asyncio.new_event_loop()` / ThreadPool
+    workaround `chat.py` uses: it is not needed here. Every node in this graph is
+    `async def` and `provide_answer` already awaits `vector_search`, so the
+    member reaches an async call directly. That workaround exists for `chat.py`'s
+    sync node, and carrying it in here would add a fragile mechanism to a path
+    that does not need one.
+    """
+    member = config.get("configurable", {}).get("member")
+    if not isinstance(member, Member) or not member.id:
+        raise OpenNotebookError(
+            "Ask was invoked without an authenticated member, so its searches "
+            "could not be confined to notebooks the caller may read. Refusing "
+            "rather than searching every notebook."
+        )
+    return member
+
+
 async def call_model_with_messages(state: ThreadState, config: RunnableConfig) -> dict:
     try:
+        # Checked at the entry node as well as in provide_answer, so a run with
+        # no member costs nothing instead of spending a strategy call first.
+        _asking_member(config)
         parser: PydanticOutputParser[Strategy] = PydanticOutputParser(
             pydantic_object=Strategy
         )
@@ -103,7 +138,9 @@ async def provide_answer(state: SubGraphState, config: RunnableConfig) -> dict:
         # if state["type"] == "text":
         #     results = text_search(state["term"], 10, True, True)
         # else:
-        results = await vector_search(state["term"], 10, True, True)
+        results = await vector_search(
+            state["term"], 10, True, True, member=_asking_member(config)
+        )
         if len(results) == 0:
             return {"answers": []}
         payload["results"] = results

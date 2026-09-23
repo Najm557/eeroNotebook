@@ -16,9 +16,16 @@ interface ChatColumnProps {
   contextSelections: ContextSelections
   sources: SourceListResponse[]
   sourcesLoading: boolean
+  /**
+   * Whether the caller owns this notebook. Asking questions and receiving grounded
+   * answers is explicitly a Viewer's right (Requirement 6.3), so the chat itself is
+   * unaffected; this only withholds the two writes the panel offers - saving an
+   * answer as a note, and renaming or deleting a session.
+   */
+  canEdit?: boolean
 }
 
-export function ChatColumn({ notebookId, contextSelections, sources, sourcesLoading }: ChatColumnProps) {
+export function ChatColumn({ notebookId, contextSelections, sources, sourcesLoading, canEdit = true }: ChatColumnProps) {
   const { t } = useTranslation()
 
   // Fetch notes for this notebook
@@ -109,7 +116,8 @@ export function ChatColumn({ notebookId, contextSelections, sources, sourcesLoad
       onDeleteSession={chat.deleteSession}
       loadingSessions={chat.loadingSessions}
       notebookContextStats={contextStats}
-      notebookId={notebookId}
+      canEdit={canEdit}
+      notebookId={canEdit ? notebookId : undefined}
     />
   )
 }

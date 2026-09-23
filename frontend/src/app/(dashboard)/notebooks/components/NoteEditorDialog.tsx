@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { useCreateNote, useUpdateNote, useNote } from '@/lib/hooks/use-notes'
 import { QUERY_KEYS } from '@/lib/api/query-client'
 import { MarkdownEditor } from '@/components/ui/markdown-editor'
+import { MarkdownRenderer } from '@/components/ui/markdown-renderer'
 import { InlineEdit } from '@/components/common/InlineEdit'
 import { cn } from "@/lib/utils";
 import { useTranslation } from '@/lib/hooks/use-translation'
@@ -28,9 +29,21 @@ interface NoteEditorDialogProps {
   onOpenChange: (open: boolean) => void
   notebookId: string
   note?: { id: string; title: string | null; content: string | null }
+  /**
+   * Read the note, do not edit it. Set for a Viewer of a shared notebook, who may
+   * read notes and not change them (Requirement 6.4) — without it the editor opens
+   * with a Save button that 403s.
+   */
+  readOnly?: boolean
 }
 
-export function NoteEditorDialog({ open, onOpenChange, notebookId, note }: NoteEditorDialogProps) {
+export function NoteEditorDialog({
+  open,
+  onOpenChange,
+  notebookId,
+  note,
+  readOnly = false,
+}: NoteEditorDialogProps) {
   const { t } = useTranslation()
   const createNote = useCreateNote()
   const updateNote = useUpdateNote()
@@ -67,6 +80,7 @@ export function NoteEditorDialog({ open, onOpenChange, notebookId, note }: NoteE
     },
   })
   const watchTitle = useWatch({ control, name: 'title' })
+  const watchContent = useWatch({ control, name: 'content' })
   const [isEditorFullscreen, setIsEditorFullscreen] = useState(false)
 
   useEffect(() => {
@@ -151,22 +165,31 @@ export function NoteEditorDialog({ open, onOpenChange, notebookId, note }: NoteE
           ) : (
             <>
               <div className="border-b px-6 py-4">
-                <InlineEdit
-                  id="note-title"
-                  name="title"
-                  value={watchTitle ?? ''}
-                  onSave={(value) => setValue('title', value || '')}
-                  placeholder={t('sources.addTitle')}
-                  emptyText={t('sources.untitledNote')}
-                  className="text-xl font-semibold"
-                  inputClassName="text-xl font-semibold"
-                />
+                {readOnly ? (
+                  <h2 className="text-xl font-semibold break-all">
+                    {watchTitle || t('sources.untitledNote')}
+                  </h2>
+                ) : (
+                  <InlineEdit
+                    id="note-title"
+                    name="title"
+                    value={watchTitle ?? ''}
+                    onSave={(value) => setValue('title', value || '')}
+                    placeholder={t('sources.addTitle')}
+                    emptyText={t('sources.untitledNote')}
+                    className="text-xl font-semibold"
+                    inputClassName="text-xl font-semibold"
+                  />
+                )}
               </div>
 
               <div className={cn(
                   "flex-1 min-h-0 overflow-y-auto",
                   !isEditorFullscreen && "px-6 py-4")
               }>
+                {readOnly ? (
+                  <MarkdownRenderer>{watchContent ?? ''}</MarkdownRenderer>
+                ) : (
                 <Controller
                   control={control}
                   name="content"
@@ -185,6 +208,7 @@ export function NoteEditorDialog({ open, onOpenChange, notebookId, note }: NoteE
                     />
                   )}
                 />
+                )}
                 {errors.content && (
                   <p className="text-sm text-red-600 mt-1">{errors.content.message}</p>
                 )}
@@ -194,11 +218,12 @@ export function NoteEditorDialog({ open, onOpenChange, notebookId, note }: NoteE
 
           <div className="border-t px-6 py-4 flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={handleClose}>
-              {t('common.cancel')}
+              {readOnly ? t('common.close') : t('common.cancel')}
             </Button>
             <Button
               type="submit"
-              disabled={isSaving || (isEditing && noteLoading)}
+              className={readOnly ? 'hidden' : undefined}
+              disabled={readOnly || isSaving || (isEditing && noteLoading)}
             >
               {isSaving
                 ? isEditing ? `${t('common.saving')}...` : `${t('common.creating')}...`

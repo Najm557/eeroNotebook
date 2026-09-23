@@ -39,6 +39,7 @@ from api.routers import (
     providers,
     search,
     settings,
+    shares,
     source_chat,
     sources,
     speaker_profiles,
@@ -47,6 +48,8 @@ from api.routers import (
 from api.routers import commands as commands_router
 from open_notebook.database.async_migrate import AsyncMigrationManager
 from open_notebook.exceptions import (
+    AccessDeniedError,
+    AccessUnavailableError,
     AuthenticationError,
     ConfigurationError,
     ExternalServiceError,
@@ -322,6 +325,38 @@ async def authentication_error_handler(request: Request, exc: AuthenticationErro
     )
 
 
+@app.exception_handler(AccessDeniedError)
+async def access_denied_error_handler(request: Request, exc: AccessDeniedError):
+    """A member who can see the record but may not change it (spec task 6.2).
+
+    Only ever reached by a Viewer. A member with no access at all raises
+    NotFoundError, so 403 never discloses that a Notebook exists.
+    """
+    return JSONResponse(
+        status_code=403,
+        content={"detail": str(exc)},
+        headers=_cors_headers(request),
+    )
+
+
+@app.exception_handler(AccessUnavailableError)
+async def access_unavailable_error_handler(
+    request: Request, exc: AccessUnavailableError
+):
+    """An access check that could not run. Never answered as a denial.
+
+    503 rather than 404 or 403 because a caller - and anyone reading the logs -
+    must be able to tell an outage from a refusal. The same rule task 5.3 applies
+    to an unreadable identity store: "the database is down" must not look like
+    "you have no access".
+    """
+    return JSONResponse(
+        status_code=503,
+        content={"detail": str(exc)},
+        headers=_cors_headers(request),
+    )
+
+
 @app.exception_handler(RateLimitError)
 async def rate_limit_error_handler(request: Request, exc: RateLimitError):
     return JSONResponse(
@@ -382,6 +417,10 @@ async def open_notebook_error_handler(request: Request, exc: OpenNotebookError):
 app.include_router(auth.router, prefix="/api", tags=["auth"])
 app.include_router(config.router, prefix="/api", tags=["config"])
 app.include_router(notebooks.router, prefix="/api", tags=["notebooks"])
+# Share management (spec task 6.3). Registered after notebooks because its paths
+# are nested under /notebooks/{id}; owner-only, and the only way a Share is
+# created or ended.
+app.include_router(shares.router, prefix="/api", tags=["shares"])
 app.include_router(search.router, prefix="/api", tags=["search"])
 app.include_router(models.router, prefix="/api", tags=["models"])
 app.include_router(transformations.router, prefix="/api", tags=["transformations"])

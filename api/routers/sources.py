@@ -34,6 +34,14 @@ from api.models import (
 from commands.source_commands import SourceProcessingInput
 from open_notebook.config import UPLOADS_FOLDER
 from open_notebook.database.repository import ensure_record_id, repo_query
+from open_notebook.domain.access import (
+    accessible_notebook_records,
+    require_notebook_read,
+    require_notebooks_write,
+    require_source_read,
+    require_source_write,
+)
+from open_notebook.domain.member import Member
 from open_notebook.domain.notebook import Asset, Notebook, Source
 from open_notebook.domain.transformation import Transformation
 from open_notebook.exceptions import (
@@ -42,6 +50,7 @@ from open_notebook.exceptions import (
     OpenNotebookError,
     UnsupportedTypeException,
 )
+from open_notebook.identity import current_member
 
 router = APIRouter()
 
@@ -291,8 +300,16 @@ async def get_sources(
         description="Field to sort by (type, title, created, updated, insights_count, or embedded)",
     ),
     sort_order: str = Query("desc", description="Sort order (asc or desc)"),
+    member: Member = Depends(current_member),
 ):
-    """Get sources with pagination and sorting support."""
+    """Get sources from notebooks this member can read, paginated and sorted.
+
+    Without a notebook filter this used to select `FROM source` - every source in
+    the instance. It now spans the notebooks the member owns or holds a Share on,
+    so the filter narrows the scope rather than creating it. Applied in the FROM
+    clause, before LIMIT: filtering afterwards would page through other members'
+    rows and return short pages that leak how many there were.
+    """
     try:
         # Validate sort parameters
         if sort_by not in SOURCE_SORT_FIELDS:
@@ -317,6 +334,7 @@ async def get_sources(
         # filter; only the FROM clause and bound params differ.
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if notebook_id:
+            await require_notebook_read(member, notebook_id)
             # Verify notebook exists first
             notebook = await Notebook.get(notebook_id)
             if not notebook:
@@ -325,7 +343,10 @@ async def get_sources(
             from_clause = "(select value in from reference where out=$notebook_id)"
             params["notebook_id"] = ensure_record_id(notebook_id)
         else:
-            from_clause = "source"
+            from_clause = (
+                "(select value in from reference where out in $accessible_notebooks)"
+            )
+            params["accessible_notebooks"] = await accessible_notebook_records(member)
 
         # Query sources - include command field with FETCH
         query = f"""
@@ -679,14 +700,30 @@ async def create_source(
     form_data: tuple[SourceCreate, Optional[UploadFile]] = Depends(
         parse_source_form_data
     ),
+    member: Member = Depends(current_member),
 ):
-    """Create a new source with support for both JSON and multipart form data."""
+    """Create a new source with support for both JSON and multipart form data.
+
+    At least one notebook is now required, and the member must own every notebook
+    named. Upstream allowed an empty list - "allow sources without notebooks" -
+    and that is the second path producing the ongoing orphaning task 6.1
+    measured: a source in no notebook inherits access from nothing, so nobody can
+    read or delete it. Access is checked before the upload is saved, so a refused
+    request leaves no file behind.
+    """
     source_data, upload_file = form_data
 
     # Initialize file_path before try block so exception handlers can reference it
     file_path = None
 
     try:
+        if not source_data.notebooks:
+            raise InvalidInputError(
+                "At least one notebook is required: a source must belong to a "
+                "notebook to be reachable"
+            )
+        await require_notebooks_write(member, source_data.notebooks)
+
         # Verify all specified notebooks exist (backward compatibility support)
         for notebook_id in source_data.notebooks or []:
             notebook = await Notebook.get(notebook_id)
@@ -744,11 +781,19 @@ async def create_source(
 
 
 @router.post("/sources/json", response_model=SourceResponse)
-async def create_source_json(source_data: SourceCreate):
-    """Create a new source using JSON payload (legacy endpoint for backward compatibility)."""
+async def create_source_json(
+    source_data: SourceCreate,
+    member: Member = Depends(current_member),
+):
+    """Create a new source using JSON payload (legacy endpoint for backward compatibility).
+
+    The member is resolved here and handed to `create_source` rather than left to
+    it: this endpoint calls that function directly, so FastAPI resolves no
+    dependencies for it and an unscoped call here would be an unscoped create.
+    """
     # Convert to form data format and call main endpoint
     form_data = (source_data, None)
-    return await create_source(form_data)
+    return await create_source(form_data, member)
 
 
 async def _resolve_source_file(source_id: str) -> tuple[str, str]:
@@ -791,9 +836,13 @@ def _is_source_file_available(source: Source) -> Optional[bool]:
 
 
 @router.get("/sources/{source_id}", response_model=SourceResponse)
-async def get_source(source_id: str):
+async def get_source(
+    source_id: str,
+    member: Member = Depends(current_member),
+):
     """Get a specific source by ID."""
     try:
+        await require_source_read(member, source_id)
         source = await Source.get(source_id)
         if not source:
             raise HTTPException(status_code=404, detail="Source not found")
@@ -849,9 +898,13 @@ async def get_source(source_id: str):
 
 
 @router.head("/sources/{source_id}/download")
-async def check_source_file(source_id: str):
+async def check_source_file(
+    source_id: str,
+    member: Member = Depends(current_member),
+):
     """Check if a source has a downloadable file."""
     try:
+        await require_source_read(member, source_id)
         await _resolve_source_file(source_id)
         return Response(status_code=200)
     except HTTPException:
@@ -864,9 +917,13 @@ async def check_source_file(source_id: str):
 
 
 @router.get("/sources/{source_id}/download")
-async def download_source_file(source_id: str):
+async def download_source_file(
+    source_id: str,
+    member: Member = Depends(current_member),
+):
     """Download the original file associated with an uploaded source."""
     try:
+        await require_source_read(member, source_id)
         resolved_path, filename = await _resolve_source_file(source_id)
         return FileResponse(
             path=resolved_path,
@@ -883,9 +940,13 @@ async def download_source_file(source_id: str):
 
 
 @router.get("/sources/{source_id}/status", response_model=SourceStatusResponse)
-async def get_source_status(source_id: str):
+async def get_source_status(
+    source_id: str,
+    member: Member = Depends(current_member),
+):
     """Get processing status for a source."""
     try:
+        await require_source_read(member, source_id)
         # First, verify source exists
         source = await Source.get(source_id)
         if not source:
@@ -964,9 +1025,14 @@ async def get_source_status(source_id: str):
 
 
 @router.put("/sources/{source_id}", response_model=SourceResponse)
-async def update_source(source_id: str, source_update: SourceUpdate):
-    """Update a source."""
+async def update_source(
+    source_id: str,
+    source_update: SourceUpdate,
+    member: Member = Depends(current_member),
+):
+    """Update a source. Owner only (Requirements 5.2, 6.4)."""
     try:
+        await require_source_write(member, source_id)
         source = await Source.get(source_id)
         if not source:
             raise HTTPException(status_code=404, detail="Source not found")
@@ -993,9 +1059,13 @@ async def update_source(source_id: str, source_update: SourceUpdate):
 
 
 @router.post("/sources/{source_id}/retry", response_model=SourceResponse)
-async def retry_source_processing(source_id: str):
-    """Retry processing for a failed or stuck source."""
+async def retry_source_processing(
+    source_id: str,
+    member: Member = Depends(current_member),
+):
+    """Retry processing for a failed or stuck source. Owner only."""
     try:
+        await require_source_write(member, source_id)
         # First, verify source exists
         source = await Source.get(source_id)
         if not source:
@@ -1114,9 +1184,17 @@ async def retry_source_processing(source_id: str):
 
 
 @router.delete("/sources/{source_id}")
-async def delete_source(source_id: str):
-    """Delete a source."""
+async def delete_source(
+    source_id: str,
+    member: Member = Depends(current_member),
+):
+    """Delete a source.
+
+    Owner of every notebook referencing it: deleting a source removes it from all
+    of them, so owning one is not permission to remove it from the others.
+    """
     try:
+        await require_source_write(member, source_id, every_notebook=True)
         source = await Source.get(source_id)
         if not source:
             raise HTTPException(status_code=404, detail="Source not found")
@@ -1134,9 +1212,13 @@ async def delete_source(source_id: str):
 
 
 @router.get("/sources/{source_id}/insights", response_model=List[SourceInsightResponse])
-async def get_source_insights(source_id: str):
+async def get_source_insights(
+    source_id: str,
+    member: Member = Depends(current_member),
+):
     """Get all insights for a specific source."""
     try:
+        await require_source_read(member, source_id)
         source = await Source.get(source_id)
         if not source:
             raise HTTPException(status_code=404, detail="Source not found")
@@ -1167,15 +1249,24 @@ async def get_source_insights(source_id: str):
     response_model=InsightCreationResponse,
     status_code=202,
 )
-async def create_source_insight(source_id: str, request: CreateSourceInsightRequest):
+async def create_source_insight(
+    source_id: str,
+    request: CreateSourceInsightRequest,
+    member: Member = Depends(current_member),
+):
     """
-    Start insight generation for a source by running a transformation.
+    Start insight generation for a source by running a transformation. Owner only.
 
     This endpoint returns immediately with a 202 Accepted status.
     The transformation runs asynchronously in the background via the job queue.
     Poll GET /sources/{source_id}/insights to see when the insight is ready.
+
+    Owner rather than Viewer: it writes persistent content into the notebook and
+    spends inference on the shared gateway. A Viewer reads and asks questions
+    (Requirement 6.3); adding material is the owner's (Requirement 6.4).
     """
     try:
+        await require_source_write(member, source_id)
         # Validate source exists
         source = await Source.get(source_id)
         if not source:

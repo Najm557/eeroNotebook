@@ -15,6 +15,17 @@ from open_notebook.exceptions import OpenNotebookError
 
 router = APIRouter()
 
+# Deliberately not notebook-scoped, and the reasoning is that it cannot be:
+# rebuilding embeddings is an instance-wide maintenance action across every
+# member's content, which is what makes it useful after an embedder change.
+# It is left open (spec task 6.2) because it discloses nothing - the counts it
+# returns are of rows, not content, and the job it submits rewrites vectors
+# idempotently without changing what any source says. So this is a
+# resource-consumption route that any member can trigger, not an access leak.
+# Confining it would mean an operator role, which the design says does not exist:
+# the shared password resolves to an ordinary admin member subject to the same
+# checks as anyone (see the design's identity and access section).
+
 
 @router.post("/rebuild", response_model=RebuildResponse)
 async def start_rebuild(request: RebuildRequest):

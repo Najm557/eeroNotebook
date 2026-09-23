@@ -1,21 +1,32 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
 from api.command_service import CommandService
 from api.models import EmbedRequest, EmbedResponse
 from open_notebook.ai.models import model_manager
+from open_notebook.domain.access import require_note_write, require_source_write
+from open_notebook.domain.member import Member
 from open_notebook.domain.notebook import Note, Source
 from open_notebook.exceptions import (
     NotFoundError,
     OpenNotebookError,
 )
+from open_notebook.identity import current_member
 
 router = APIRouter()
 
 
 @router.post("/embed", response_model=EmbedResponse)
-async def embed_content(embed_request: EmbedRequest):
-    """Embed content for vector search."""
+async def embed_content(
+    embed_request: EmbedRequest,
+    member: Member = Depends(current_member),
+):
+    """Embed content for vector search. Owner only.
+
+    Addresses a source or a note directly by id, so it is scoped through that
+    record's notebooks like any other content route. Owner rather than Viewer: it
+    writes embeddings and spends inference on the shared gateway.
+    """
     try:
         # Check if embedding model is available
         if not await model_manager.get_embedding_model():
@@ -32,6 +43,13 @@ async def embed_content(embed_request: EmbedRequest):
             raise HTTPException(
                 status_code=400, detail="Item type must be either 'source' or 'note'"
             )
+
+        # Before either branch, so the async path cannot queue a job for content
+        # the member cannot reach.
+        if item_type == "source":
+            await require_source_write(member, item_id)
+        else:
+            await require_note_write(member, item_id)
 
         # Branch based on processing mode
         if embed_request.async_processing:

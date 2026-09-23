@@ -28,6 +28,11 @@ export function NotebookCard({ notebook }: NotebookCardProps) {
   const router = useRouter()
   const updateNotebook = useUpdateNotebook()
 
+  // Archiving and deleting are owner-only (Requirement 5.2), so a Viewer gets no
+  // actions menu at all rather than one whose every item 403s. A shared notebook
+  // is still opened by clicking the card.
+  const isOwner = notebook.role === 'owner'
+
   const handleArchiveToggle = (e: React.MouseEvent) => {
     e.stopPropagation()
     updateNotebook.mutate({
@@ -58,45 +63,52 @@ export function NotebookCard({ notebook }: NotebookCardProps) {
                     {t('notebooks.archived')}
                   </Badge>
                 )}
+                {!isOwner && (
+                  <Badge variant="outline" className="mt-1">
+                    {t('notebooks.sharedWithYou')}
+                  </Badge>
+                )}
               </div>
-              
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <MoreHorizontal className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                  <DropdownMenuItem onClick={handleArchiveToggle}>
-                    {notebook.archived ? (
-                      <>
-                        <ArchiveRestore className="h-4 w-4 mr-2" />
-                        {t('notebooks.unarchive')}
-                      </>
-                    ) : (
-                      <>
-                        <Archive className="h-4 w-4 mr-2" />
-                        {t('notebooks.archive')}
-                      </>
-                    )}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setShowDeleteDialog(true)
-                    }}
-                    className="text-red-600"
-                  >
-                    <Trash2 className="h-4 w-4 mr-2" />
-                    {t('common.delete')}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+
+              {isOwner && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                    <DropdownMenuItem onClick={handleArchiveToggle}>
+                      {notebook.archived ? (
+                        <>
+                          <ArchiveRestore className="h-4 w-4 mr-2" />
+                          {t('notebooks.unarchive')}
+                        </>
+                      ) : (
+                        <>
+                          <Archive className="h-4 w-4 mr-2" />
+                          {t('notebooks.archive')}
+                        </>
+                      )}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setShowDeleteDialog(true)
+                      }}
+                      className="text-red-600"
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      {t('common.delete')}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
             </div>
           </CardHeader>
           
@@ -126,12 +138,14 @@ export function NotebookCard({ notebook }: NotebookCardProps) {
           </CardContent>
       </Card>
 
-      <NotebookDeleteDialog
-        open={showDeleteDialog}
-        onOpenChange={setShowDeleteDialog}
-        notebookId={notebook.id}
-        notebookName={notebook.name}
-      />
+      {isOwner && (
+        <NotebookDeleteDialog
+          open={showDeleteDialog}
+          onOpenChange={setShowDeleteDialog}
+          notebookId={notebook.id}
+          notebookName={notebook.name}
+        />
+      )}
     </>
   )
 }

@@ -17,6 +17,7 @@ tests/test_error_message_sanitization.py); a regression case for that
 guarantee is included at the bottom.
 """
 
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -38,13 +39,29 @@ def _boom(*_args, **_kwargs):
     raise ConfigurationError(CONFIG_ERROR_MESSAGE)
 
 
+# Some routes now run an access check before the call this test is about, and a
+# refusal there would answer 404 or 503 before the ConfigurationError could be
+# raised at all. `prelude` satisfies those checks so the case still exercises the
+# arm it was written for. Keyed by target, valued by what that target should
+# return (spec task 6.4).
+PRELUDES: dict[str, dict[str, object]] = {
+    # GET /commands/jobs/{job_id} resolves the job back to the content it names
+    # and requires read access on it before reading the job.
+    "commands": {
+        "api.routers.commands.CommandService.content_for_job": ("source", "source:1"),
+        "api.routers.commands.require_source_read": ["notebook:1"],
+    },
+}
+
 # (router, patch target, method, url, json body) — one per fixed router.
 CASES = [
     ("chat", "api.routers.chat.Notebook.get", "GET", "/api/chat/sessions?notebook_id=notebook:1", None),
     ("source_chat", "api.routers._chat_shared.Source.get", "GET", "/api/sources/xyz/chat/sessions", None),
     ("sources", "api.routers.sources.repo_query", "GET", "/api/sources", None),
     ("notebooks", "api.routers.notebooks.repo_query", "GET", "/api/notebooks", None),
-    ("notes", "api.routers.notes.Note.get_all", "GET", "/api/notes", None),
+    # Unfiltered /api/notes no longer reads every note via Note.get_all; it
+    # selects the notes of the member's own notebooks (spec task 6.2).
+    ("notes", "api.routers.notes.repo_query", "GET", "/api/notes", None),
     ("models", "api.routers.models.Model.get_all", "GET", "/api/models", None),
     ("commands", "api.routers.commands.CommandService.get_command_status", "GET", "/api/commands/jobs/command:abc", None),
     ("credentials", "api.routers.credentials.Credential.get_all", "GET", "/api/credentials", None),
@@ -66,7 +83,12 @@ CASES = [
     ids=[case[0] for case in CASES],
 )
 def test_configuration_error_maps_to_422(client, router, target, method, url, body):
-    with patch(target, new=AsyncMock(side_effect=_boom)):
+    with ExitStack() as stack:
+        for prelude_target, value in PRELUDES.get(router, {}).items():
+            stack.enter_context(
+                patch(prelude_target, new=AsyncMock(return_value=value))
+            )
+        stack.enter_context(patch(target, new=AsyncMock(side_effect=_boom)))
         response = client.request(method, url, json=body)
 
     assert response.status_code == 422, (

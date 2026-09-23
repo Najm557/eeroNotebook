@@ -40,6 +40,13 @@ export default function NotebookPage() {
   const notebookId = params?.id ? decodeURIComponent(params.id as string) : ''
 
   const { data: notebook, isLoading: notebookLoading } = useNotebook(notebookId)
+
+  // The caller's role on this notebook, as the API reported it (spec task 6.3).
+  // Every column below takes it so that owner-only actions are not offered to a
+  // Viewer - the API refuses them, and an action that always fails is worse than
+  // an action that is absent. Defaults to false while the notebook is loading, so
+  // the write affordances appear only once the role is actually known.
+  const canEdit = notebook?.role === 'owner'
   const {
     sources,
     isLoading: sourcesLoading,
@@ -196,6 +203,7 @@ export default function NotebookPage() {
                     hasNextPage={hasNextPage}
                     isFetchingNextPage={isFetchingNextPage}
                     fetchNextPage={fetchNextPage}
+                    canEdit={canEdit}
                   />
                 )}
                 {mobileActiveTab === 'notes' && (
@@ -206,6 +214,7 @@ export default function NotebookPage() {
                     contextSelections={contextSelections.notes}
                     onContextModeChange={handleNoteContextModeChange}
                     onBulkContextModeChange={handleBulkNoteContext}
+                    canEdit={canEdit}
                   />
                 )}
                 {mobileActiveTab === 'chat' && (
@@ -214,6 +223,7 @@ export default function NotebookPage() {
                     contextSelections={contextSelections}
                     sources={sources}
                     sourcesLoading={sourcesLoading}
+                    canEdit={canEdit}
                   />
                 )}
               </div>
@@ -242,6 +252,7 @@ export default function NotebookPage() {
                 hasNextPage={hasNextPage}
                 isFetchingNextPage={isFetchingNextPage}
                 fetchNextPage={fetchNextPage}
+                canEdit={canEdit}
               />
             </div>
 
@@ -257,6 +268,7 @@ export default function NotebookPage() {
                 contextSelections={contextSelections.notes}
                 onContextModeChange={handleNoteContextModeChange}
                 onBulkContextModeChange={handleBulkNoteContext}
+                canEdit={canEdit}
               />
             </div>
 
@@ -267,6 +279,7 @@ export default function NotebookPage() {
                 contextSelections={contextSelections}
                 sources={sources}
                 sourcesLoading={sourcesLoading}
+                canEdit={canEdit}
               />
             </div>
           </div>

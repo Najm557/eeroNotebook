@@ -61,7 +61,9 @@ def authenticated_requests(request):
     from open_notebook.domain.member import Member
     from open_notebook.identity import middleware as identity_middleware
 
-    test_member = Member(provider="test-suite", subject="test-subject")
+    test_member = Member(
+        id="member:testsuite", provider="test-suite", subject="test-subject"
+    )
 
     async def dispatch(self, http_request, call_next):
         if (
@@ -78,8 +80,67 @@ def authenticated_requests(request):
         yield
 
 
+@pytest.fixture(autouse=True)
+def authorized_requests(request):
+    """Let route tests reach their routes' bodies.
+
+    The same problem as `authenticated_requests` one step further in. Every route
+    that touches a notebook, source, note or insight now resolves the caller's
+    access first (spec task 6.2), and that resolution is four database reads the
+    suite's route tests neither expect nor mock - they patch the symbols their own
+    router imported, so an unpatched read in the access module would open a real
+    connection. Those tests assert routing and response shaping, which is worth
+    keeping separate from authorization.
+
+    The four functions patched here are every database-backed decision in
+    `open_notebook.domain.access`; the `require_*` functions compose them and are
+    deliberately left real, so the composition - which role may do what - is still
+    the production one under test.
+
+    Access enforcement itself is covered by tests/test_access_control.py, which
+    opts out with:
+
+        @pytest.mark.no_access_bypass
+    """
+    if request.node.get_closest_marker("no_access_bypass"):
+        yield
+        return
+
+    from open_notebook.domain import access
+
+    async def notebook_access(member, notebook_id):
+        return access.NotebookAccess(
+            notebook_id=str(notebook_id), role=access.Role.OWNER
+        )
+
+    async def notebook_ids_for(kind, record_id):
+        return ["notebook:testsuite"]
+
+    async def source_for_insight(insight_id):
+        return "source:testsuite"
+
+    async def accessible_notebook_ids(member):
+        # Empty rather than a stand-in id: list routes bind this into a query
+        # whose `repo_query` these tests already mock, so the value is never read,
+        # and an invented id would make a test that forgot to mock look like it
+        # had passed.
+        return []
+
+    with (
+        patch.object(access, "notebook_access", notebook_access),
+        patch.object(access, "_notebook_ids_for", notebook_ids_for),
+        patch.object(access, "_source_for_insight", source_for_insight),
+        patch.object(access, "accessible_notebook_ids", accessible_notebook_ids),
+    ):
+        yield
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "no_auth_bypass: exercise real authentication instead of the test bypass",
+    )
+    config.addinivalue_line(
+        "markers",
+        "no_access_bypass: exercise real access enforcement instead of the test bypass",
     )

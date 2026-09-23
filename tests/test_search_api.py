@@ -41,11 +41,19 @@ class TestSearchLimitValidation:
         mock_text_search.assert_awaited_once()
 
 
+@pytest.fixture
+def searching_member():
+    """A saved member, which every search call now requires (spec task 6.4)."""
+    from open_notebook.domain.member import Member
+
+    return Member(id="member:testsuite", provider="test-suite", subject="test-subject")
+
+
 class TestTextSearchHighlightOverflowFallback:
     """text_search() must fall back to vector search on a highlight position overflow (#648)."""
 
     @pytest.mark.asyncio
-    async def test_position_overflow_falls_back_to_vector_search(self):
+    async def test_position_overflow_falls_back_to_vector_search(self, searching_member):
         from open_notebook.domain import notebook as notebook_module
 
         overflow = RuntimeError(
@@ -62,13 +70,21 @@ class TestTextSearchHighlightOverflowFallback:
                 return_value=[{"id": "source:1"}],
             ) as mock_vector,
         ):
-            result = await notebook_module.text_search("hello", 10)
+            result = await notebook_module.text_search(
+                "hello", 10, member=searching_member
+            )
 
         assert result == [{"id": "source:1"}]
-        mock_vector.assert_awaited_once_with("hello", 10, True, True)
+        # The fallback must carry the member too. A fallback that searched
+        # unscoped would turn a highlight overflow into a disclosure.
+        mock_vector.assert_awaited_once_with(
+            "hello", 10, True, True, member=searching_member
+        )
 
     @pytest.mark.asyncio
-    async def test_position_overflow_raises_when_vector_also_fails(self):
+    async def test_position_overflow_raises_when_vector_also_fails(
+        self, searching_member
+    ):
         from open_notebook.domain import notebook as notebook_module
         from open_notebook.exceptions import DatabaseOperationError
 
@@ -87,10 +103,10 @@ class TestTextSearchHighlightOverflowFallback:
             # When both search paths fail, surface the error rather than masking it
             # as an empty result set.
             with pytest.raises(DatabaseOperationError):
-                await notebook_module.text_search("hello", 10)
+                await notebook_module.text_search("hello", 10, member=searching_member)
 
     @pytest.mark.asyncio
-    async def test_other_runtime_errors_still_raise(self):
+    async def test_other_runtime_errors_still_raise(self, searching_member):
         from open_notebook.domain import notebook as notebook_module
         from open_notebook.exceptions import DatabaseOperationError
 
@@ -101,4 +117,4 @@ class TestTextSearchHighlightOverflowFallback:
             side_effect=RuntimeError("some other db failure"),
         ):
             with pytest.raises(DatabaseOperationError):
-                await notebook_module.text_search("hello", 10)
+                await notebook_module.text_search("hello", 10, member=searching_member)

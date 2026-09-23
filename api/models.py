@@ -26,6 +26,42 @@ class NotebookResponse(BaseModel):
     updated: str
     source_count: int
     note_count: int
+    # The caller's own role on this notebook, so the UI can stop offering actions
+    # the API will refuse (spec task 6.3). Not the owner's identity: who owns a
+    # notebook is nobody else's business, and "what may I do here" is the only
+    # question a client needs answered.
+    role: Literal["owner", "viewer"]
+
+
+# Share models
+class ShareCreate(BaseModel):
+    """One address. Requirement 6.6 met by the shape of the request.
+
+    `extra="forbid"` is the point of this model, not tidiness: a request carrying
+    `members`, `emails`, `group`, `everyone` or `role` is rejected with 422 rather
+    than silently ignored, so there is no field to add later that quietly widens a
+    grant. One request grants one member access to one notebook, and `role` is
+    pinned to `viewer` by the schema (migration 25) in any case.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(
+        ...,
+        min_length=3,
+        max_length=320,
+        description="The address of the single member to grant Viewer access to",
+    )
+
+
+class ShareResponse(BaseModel):
+    notebook_id: str
+    member_id: str
+    # Absent only if the member record disappeared without its share; migration
+    # 25's cascade should prevent it.
+    email: Optional[str] = None
+    role: Literal["viewer"]
+    created: str
 
 
 class RecentlyViewedResponse(BaseModel):

@@ -2,7 +2,7 @@ import asyncio
 import json
 from typing import AsyncGenerator, List, Optional
 
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
@@ -17,12 +17,15 @@ from api.routers._chat_shared import (
     get_verified_source_session,
 )
 from open_notebook.database.repository import ensure_record_id, repo_query
+from open_notebook.domain.access import require_source_read, require_source_write
+from open_notebook.domain.member import Member
 from open_notebook.domain.notebook import ChatSession
 from open_notebook.exceptions import (
     NotFoundError,
     OpenNotebookError,
 )
 from open_notebook.graphs.source_chat import source_chat_graph as source_chat_graph
+from open_notebook.identity import current_member
 from open_notebook.utils.graph_utils import get_session_message_count
 
 router = APIRouter()
@@ -86,9 +89,15 @@ class SendMessageRequest(BaseModel):
 async def create_source_chat_session(
     request: CreateSourceChatSessionRequest,
     source_id: str = Path(..., description="Source ID"),
+    member: Member = Depends(current_member),
 ):
-    """Create a new chat session for a source."""
+    """Create a new chat session for a source.
+
+    Read access on the source, which inherits from its notebooks: asking
+    questions of shared material is explicitly a Viewer's (Requirement 6.3).
+    """
     try:
+        await require_source_read(member, source_id)
         # Verify source exists (normalizes the ID and 404s if missing)
         full_source_id, _source = await get_source_or_404(source_id)
 
@@ -127,9 +136,13 @@ async def create_source_chat_session(
 @router.get(
     "/sources/{source_id}/chat/sessions", response_model=List[SourceChatSessionResponse]
 )
-async def get_source_chat_sessions(source_id: str = Path(..., description="Source ID")):
+async def get_source_chat_sessions(
+    source_id: str = Path(..., description="Source ID"),
+    member: Member = Depends(current_member),
+):
     """Get all chat sessions for a source."""
     try:
+        await require_source_read(member, source_id)
         # Verify source exists (normalizes the ID and 404s if missing)
         full_source_id, _source = await get_source_or_404(source_id)
 
@@ -191,9 +204,11 @@ async def get_source_chat_sessions(source_id: str = Path(..., description="Sourc
 async def get_source_chat_session(
     source_id: str = Path(..., description="Source ID"),
     session_id: str = Path(..., description="Session ID"),
+    member: Member = Depends(current_member),
 ):
     """Get a specific source chat session with its messages."""
     try:
+        await require_source_read(member, source_id)
         # Verify source + session exist and are related (404s otherwise)
         _full_source_id, _source, full_session_id, session = (
             await get_verified_source_session(source_id, session_id)
@@ -256,9 +271,16 @@ async def update_source_chat_session(
     request: UpdateSourceChatSessionRequest,
     source_id: str = Path(..., description="Source ID"),
     session_id: str = Path(..., description="Session ID"),
+    member: Member = Depends(current_member),
 ):
-    """Update source chat session title and/or model override."""
+    """Update source chat session title and/or model override. Owner only.
+
+    Sessions are shared by everyone who can reach the source, because
+    `chat_session` carries no member reference, so renaming one is renaming
+    somebody else's.
+    """
     try:
+        await require_source_write(member, source_id)
         # Verify source + session exist and are related (404s otherwise)
         _full_source_id, _source, full_session_id, session = (
             await get_verified_source_session(source_id, session_id)
@@ -303,9 +325,11 @@ async def update_source_chat_session(
 async def delete_source_chat_session(
     source_id: str = Path(..., description="Source ID"),
     session_id: str = Path(..., description="Session ID"),
+    member: Member = Depends(current_member),
 ):
-    """Delete a source chat session."""
+    """Delete a source chat session. Owner only, per update_source_chat_session."""
     try:
+        await require_source_write(member, source_id)
         # Verify source + session exist and are related (404s otherwise)
         _full_source_id, _source, full_session_id, session = (
             await get_verified_source_session(source_id, session_id)
@@ -409,9 +433,15 @@ async def send_message_to_source_chat(
     request: SendMessageRequest,
     source_id: str = Path(..., description="Source ID"),
     session_id: str = Path(..., description="Session ID"),
+    member: Member = Depends(current_member),
 ):
-    """Send a message to source chat session with SSE streaming response."""
+    """Send a message to source chat session with SSE streaming response.
+
+    Read access: this is a Viewer asking a question of material they may read.
+    The graph answers from this source alone, which is the source just checked.
+    """
     try:
+        await require_source_read(member, source_id)
         # Verify source + session exist and are related (404s otherwise)
         full_source_id, _source, full_session_id, session = (
             await get_verified_source_session(source_id, session_id)

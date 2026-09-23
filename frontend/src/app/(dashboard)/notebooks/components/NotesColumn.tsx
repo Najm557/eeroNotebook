@@ -33,6 +33,12 @@ interface NotesColumnProps {
   contextSelections?: Record<string, NoteContextMode>
   onContextModeChange?: (noteId: string, mode: NoteContextMode) => void
   onBulkContextModeChange?: (action: NoteContextDefault) => void
+  /**
+   * Whether the caller owns this notebook. Writing, editing and deleting a note
+   * are owner-only (Requirement 6.4), so a Viewer reads notes and uses them as
+   * chat context and nothing more.
+   */
+  canEdit?: boolean
 }
 
 export function NotesColumn({
@@ -41,7 +47,8 @@ export function NotesColumn({
   notebookId,
   contextSelections,
   onContextModeChange,
-  onBulkContextModeChange
+  onBulkContextModeChange,
+  canEdit = true
 }: NotesColumnProps) {
   const { t, language } = useTranslation()
   const [showAddDialog, setShowAddDialog] = useState(false)
@@ -107,16 +114,18 @@ export function NotesColumn({
                     </DropdownMenuContent>
                   </DropdownMenu>
                 )}
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    setEditingNote(null)
-                    setShowAddDialog(true)
-                  }}
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  {t('common.writeNote')}
-                </Button>
+                {canEdit && (
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setEditingNote(null)
+                      setShowAddDialog(true)
+                    }}
+                  >
+                    <Plus className="h-4 w-4 mr-2" />
+                    {t('common.writeNote')}
+                  </Button>
+                )}
                 {collapseButton}
               </div>
             </div>
@@ -131,7 +140,11 @@ export function NotesColumn({
               <EmptyState
                 icon={StickyNote}
                 title={t('notebooks.noNotesYet')}
-                description={t('sources.createFirstNote')}
+                description={
+                  canEdit
+                    ? t('sources.createFirstNote')
+                    : t('notebooks.noNotesViewer')
+                }
               />
             ) : (
               <div className="space-y-3">
@@ -172,7 +185,8 @@ export function NotesColumn({
                           </div>
                         )}
 
-                        {/* Ellipsis menu for delete action */}
+                        {/* Ellipsis menu for delete action - owner only */}
+                        {canEdit && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button
@@ -197,6 +211,7 @@ export function NotesColumn({
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
+                        )}
                       </div>
                     </div>
 
@@ -229,6 +244,7 @@ export function NotesColumn({
         }}
         notebookId={notebookId}
         note={editingNote ?? undefined}
+        readOnly={!canEdit}
       />
 
       <ConfirmDialog

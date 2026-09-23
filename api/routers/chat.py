@@ -2,7 +2,7 @@ import asyncio
 import traceback
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from langchain_core.runnables import RunnableConfig
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -14,12 +14,19 @@ from api.routers._chat_shared import (
     get_session_or_404,
 )
 from open_notebook.database.repository import ensure_record_id, repo_query
+from open_notebook.domain.access import (
+    require_chat_session_read,
+    require_chat_session_write,
+    require_notebook_read,
+)
+from open_notebook.domain.member import Member
 from open_notebook.domain.notebook import ChatSession, Notebook
 from open_notebook.exceptions import (
     NotFoundError,
     OpenNotebookError,
 )
 from open_notebook.graphs.chat import graph as chat_graph
+from open_notebook.identity import current_member
 from open_notebook.utils import token_count
 from open_notebook.utils.context_builder import build_notebook_context
 from open_notebook.utils.graph_utils import get_session_message_count
@@ -91,9 +98,17 @@ class BuildContextResponse(BaseModel):
 
 
 @router.get("/chat/sessions", response_model=List[ChatSessionResponse])
-async def get_sessions(notebook_id: str = Query(..., description="Notebook ID")):
-    """Get all chat sessions for a notebook."""
+async def get_sessions(
+    notebook_id: str = Query(..., description="Notebook ID"),
+    member: Member = Depends(current_member),
+):
+    """Get all chat sessions for a notebook.
+
+    Read access, not owner: a Viewer may ask questions of a shared notebook
+    (Requirement 6.3), which means reaching its chat sessions.
+    """
     try:
+        await require_notebook_read(member, notebook_id)
         # Get notebook to verify it exists
         notebook = await Notebook.get(notebook_id)
         if not notebook:
@@ -136,9 +151,19 @@ async def get_sessions(notebook_id: str = Query(..., description="Notebook ID"))
 
 
 @router.post("/chat/sessions", response_model=ChatSessionResponse)
-async def create_session(request: CreateSessionRequest):
-    """Create a new chat session."""
+async def create_session(
+    request: CreateSessionRequest,
+    member: Member = Depends(current_member),
+):
+    """Create a new chat session.
+
+    Read access rather than owner: asking questions is explicitly a Viewer's
+    (Requirement 6.3), and a session is how a question is asked. It is not a
+    notebook setting, a source or a note, which are the three things Requirement
+    6.4 reserves to the owner.
+    """
     try:
+        await require_notebook_read(member, request.notebook_id)
         # Verify notebook exists
         notebook = await Notebook.get(request.notebook_id)
         if not notebook:
@@ -180,9 +205,13 @@ async def create_session(request: CreateSessionRequest):
 @router.get(
     "/chat/sessions/{session_id}", response_model=ChatSessionWithMessagesResponse
 )
-async def get_session(session_id: str):
+async def get_session(
+    session_id: str,
+    member: Member = Depends(current_member),
+):
     """Get a specific session with its messages."""
     try:
+        await require_chat_session_read(member, session_id)
         # Get session (normalizes the ID and 404s if missing)
         full_session_id, session = await get_session_or_404(session_id)
 
@@ -234,9 +263,19 @@ async def get_session(session_id: str):
 
 
 @router.put("/chat/sessions/{session_id}", response_model=ChatSessionResponse)
-async def update_session(session_id: str, request: UpdateSessionRequest):
-    """Update session title."""
+async def update_session(
+    session_id: str,
+    request: UpdateSessionRequest,
+    member: Member = Depends(current_member),
+):
+    """Update session title. Owner only.
+
+    Sessions on a notebook are shared by everyone who can reach it, because
+    `chat_session` carries no member reference. So renaming or deleting one is
+    the owner's: a Viewer renaming a session would be renaming somebody else's.
+    """
     try:
+        await require_chat_session_write(member, session_id)
         # Get session (normalizes the ID and 404s if missing)
         full_session_id, session = await get_session_or_404(session_id)
 
@@ -281,9 +320,13 @@ async def update_session(session_id: str, request: UpdateSessionRequest):
 
 
 @router.delete("/chat/sessions/{session_id}", response_model=SuccessResponse)
-async def delete_session(session_id: str):
-    """Delete a chat session."""
+async def delete_session(
+    session_id: str,
+    member: Member = Depends(current_member),
+):
+    """Delete a chat session. Owner only, for the reason on update_session."""
     try:
+        await require_chat_session_write(member, session_id)
         # Get session (normalizes the ID and 404s if missing)
         _full_session_id, session = await get_session_or_404(session_id)
 
@@ -302,9 +345,18 @@ async def delete_session(session_id: str):
 
 
 @router.post("/chat/execute", response_model=ExecuteChatResponse)
-async def execute_chat(request: ExecuteChatRequest):
-    """Execute a chat request and get AI response."""
+async def execute_chat(
+    request: ExecuteChatRequest,
+    member: Member = Depends(current_member),
+):
+    """Execute a chat request and get AI response.
+
+    Read access: this is a Viewer asking a question (Requirement 6.3). The
+    context arrives in the request body, and the graph builds its answer from the
+    notebook this session belongs to - which is the notebook just checked.
+    """
     try:
+        await require_chat_session_read(member, request.session_id)
         # Verify session exists (normalizes the ID and 404s if missing)
         full_session_id, session = await get_session_or_404(request.session_id)
 
@@ -389,9 +441,18 @@ async def execute_chat(request: ExecuteChatRequest):
 
 
 @router.post("/chat/context", response_model=BuildContextResponse)
-async def build_context(request: BuildContextRequest):
-    """Build context for a notebook based on context configuration."""
+async def build_context(
+    request: BuildContextRequest,
+    member: Member = Depends(current_member),
+):
+    """Build context for a notebook based on context configuration.
+
+    Returns the notebook's source text, so it is the single most disclosing route
+    in the chat router - and read access is exactly right for it, since a Viewer
+    is entitled to the sources (Requirement 6.3).
+    """
     try:
+        await require_notebook_read(member, request.notebook_id)
         # Verify notebook exists
         notebook = await Notebook.get(request.notebook_id)
         if not notebook:

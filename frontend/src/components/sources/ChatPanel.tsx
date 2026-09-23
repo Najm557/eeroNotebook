@@ -51,8 +51,16 @@ interface ChatPanelProps {
   contextType?: 'source' | 'notebook'
   // Notebook context stats (for notebook chat)
   notebookContextStats?: NotebookContextStats
-  // Notebook ID for saving notes
+  // Notebook ID for saving notes. Left unset for a Viewer of a shared notebook:
+  // saving an answer as a note is a write the API refuses (Requirement 6.4), and
+  // this prop is the only thing that surfaces that action.
   notebookId?: string
+  /**
+   * Whether the caller may rename or delete a chat session. Asking questions and
+   * starting a session are a Viewer's (Requirement 6.3); editing somebody else's
+   * session is not.
+   */
+  canEdit?: boolean
 }
 
 export function ChatPanel({
@@ -72,6 +80,7 @@ export function ChatPanel({
   title,
   contextType = 'source',
   notebookContextStats,
+  canEdit = true,
   notebookId
 }: ChatPanelProps) {
   const { t } = useTranslation()
@@ -135,6 +144,7 @@ export function ChatPanel({
                   onUpdateSession={(sessionId, title) => onUpdateSession?.(sessionId, title)}
                   onDeleteSession={(sessionId) => onDeleteSession?.(sessionId)}
                   loadingSessions={loadingSessions}
+                  canEdit={canEdit}
                 />
               </DialogContent>
             </Dialog>

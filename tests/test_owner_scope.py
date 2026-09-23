@@ -57,12 +57,17 @@ class TestMigrationIsRegistered:
     """A migration file that nobody runs is not a migration."""
 
     def test_migration_25_is_registered_up_and_down(self):
+        # `>=` rather than `== 25`: later tasks add migrations of their own (6.4
+        # took 26), and this file is about migration 25. That migration being
+        # registered *as number 25* is what matters, and
+        # test_registered_migration_25_is_the_file_on_disk asserts it by index.
+        # The newest migration's own test owns the exact count.
         manager = AsyncMigrationManager()
-        assert len(manager.up_migrations) == 25, (
+        assert len(manager.up_migrations) >= 25, (
             "migration 25 is not registered in AsyncMigrationManager; migrations "
             "are hard-coded rather than discovered, so the file alone does nothing"
         )
-        assert len(manager.down_migrations) == 25
+        assert len(manager.down_migrations) >= 25
 
     def test_every_up_migration_has_a_down_migration(self):
         manager = AsyncMigrationManager()

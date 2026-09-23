@@ -29,6 +29,10 @@ export function NotebookRow({ notebook }: NotebookRowProps) {
   const router = useRouter()
   const updateNotebook = useUpdateNotebook()
 
+  // Same rule as the card: a Viewer is offered no actions menu, because every
+  // item in it is owner-only (Requirement 5.2).
+  const isOwner = notebook.role === 'owner'
+
   const handleArchiveToggle = (e: React.MouseEvent) => {
     e.stopPropagation()
     updateNotebook.mutate({
@@ -65,6 +69,11 @@ export function NotebookRow({ notebook }: NotebookRowProps) {
                 {t('notebooks.archived')}
               </Badge>
             )}
+            {!isOwner && (
+              <Badge variant="outline">
+                {t('notebooks.sharedWithYou')}
+              </Badge>
+            )}
           </div>
           {notebook.description && (
             <p className="text-sm text-muted-foreground truncate">
@@ -91,52 +100,56 @@ export function NotebookRow({ notebook }: NotebookRowProps) {
           }) })}
         </div>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              aria-label={t('common.actions')}
-              variant="ghost"
-              size="sm"
-              className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity shrink-0"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <MoreHorizontal className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-            <DropdownMenuItem onClick={handleArchiveToggle}>
-              {notebook.archived ? (
-                <>
-                  <ArchiveRestore className="h-4 w-4 mr-2" />
-                  {t('notebooks.unarchive')}
-                </>
-              ) : (
-                <>
-                  <Archive className="h-4 w-4 mr-2" />
-                  {t('notebooks.archive')}
-                </>
-              )}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={(e) => {
-                e.stopPropagation()
-                setShowDeleteDialog(true)
-              }}
-              className="text-red-600"
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              {t('common.delete')}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {isOwner && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                aria-label={t('common.actions')}
+                variant="ghost"
+                size="sm"
+                className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity shrink-0"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenuItem onClick={handleArchiveToggle}>
+                {notebook.archived ? (
+                  <>
+                    <ArchiveRestore className="h-4 w-4 mr-2" />
+                    {t('notebooks.unarchive')}
+                  </>
+                ) : (
+                  <>
+                    <Archive className="h-4 w-4 mr-2" />
+                    {t('notebooks.archive')}
+                  </>
+                )}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setShowDeleteDialog(true)
+                }}
+                className="text-red-600"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                {t('common.delete')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
 
-      <NotebookDeleteDialog
-        open={showDeleteDialog}
-        onOpenChange={setShowDeleteDialog}
-        notebookId={notebook.id}
-        notebookName={notebook.name}
-      />
+      {isOwner && (
+        <NotebookDeleteDialog
+          open={showDeleteDialog}
+          onOpenChange={setShowDeleteDialog}
+          notebookId={notebook.id}
+          notebookName={notebook.name}
+        />
+      )}
     </>
   )
 }

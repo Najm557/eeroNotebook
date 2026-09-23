@@ -1,0 +1,209 @@
+-- Migration 26: confine search to the Notebooks a member may reach.
+--
+-- Requirements 7.3, 7.4, 2.4. Spec task 6.4.
+--
+-- Upstream's fn::text_search and fn::vector_search span every row in the
+-- instance. Task 6.2 scoped 44 route/method pairs and deliberately left the
+-- three search routes alone rather than half-doing them, recording search as an
+-- open leak until this migration. Measured before writing it: one unscoped
+-- text search over a two-member database returned all 18 matching records,
+-- including both members' sources and notes, an orphaned source, and a source
+-- in a Notebook owned by nobody.
+--
+-- WHY THE FILTER IS IN HERE AND NOT IN THE CALLING QUERY.
+--
+-- Wrapping the function call in an outer WHERE would have needed no migration,
+-- and it is wrong. Both functions apply LIMIT $match_count to the ranked set
+-- before returning, and fn::vector_search limits each branch as well, so an
+-- outer filter narrows a top-N that was already chosen across every member's
+-- content. Measured on a real database: with six of another member's notes
+-- matching the same term, a member asking for 3 results got 1 of her own 3
+-- matches back. The other two were silently dropped. An empty or short result
+-- set is exactly what "no matches" looks like, so that failure is invisible -
+-- the same class of fault as a scoping filter that matches nothing. Inside each
+-- branch, before its own LIMIT, is the only place the filter is both correct and
+-- non-disclosing.
+--
+-- WHAT IS BOUND, AND WHAT THAT COSTS.
+--
+-- $notebooks is the set of Notebooks the caller owns or holds a Share on,
+-- computed by open_notebook/domain/access.py and bound per call. The access
+-- rule itself stays in that module: this function is told which Notebooks to
+-- read, never how the answer was reached, so there is still one place that
+-- decides what a member may see. That matches how task 6.2's list routes bind
+-- $accessible_notebooks into their own queries.
+--
+-- $notebooks must be bound as record ids and not as strings. Task 6.3 lost a
+-- session to this: repo_query renders every RecordID in a result as a string on
+-- the way out, and `out IN $notebooks` with string elements matches nothing
+-- silently - an empty result rather than an error. Re-measured here, still true.
+--
+-- Fail-closed by construction. An empty $notebooks makes both accessible sets
+-- empty, and `id IN []` matches nothing rather than everything (measured, both
+-- in task 6.2 and again here). A member with no id, or one whose access read
+-- failed, never reaches this function at all: access.py returns an empty set for
+-- the first and raises AccessUnavailableError (503) for the second, so an outage
+-- cannot arrive here disguised as "this member owns nothing".
+--
+-- The signature change is the backstop. Adding $notebooks makes the arity 5 and
+-- 6, so any caller still making upstream's unscoped 4- or 5-argument call gets
+-- "Incorrect arguments for function fn::text_search()" and fails loudly instead
+-- of quietly searching the instance. That is deliberate: it is what turns a
+-- future upstream migration redefining these functions into a visible failure
+-- rather than a silent removal of the scoping, which Requirement 14.4 exists to
+-- catch. tests/test_search_scoping.py asserts the last definition of each
+-- function in the migration chain still carries the filter.
+--
+-- Everything else in both bodies is upstream's, unchanged, so that a merge diff
+-- shows only the scoping. Relevance and similarity scores were compared against
+-- upstream's own definitions on the same rows and are bit-identical.
+--
+-- Cost: `reference` and `artifact` carry no index, so each accessible-set lookup
+-- scans the relation. That is the same read task 6.2's list routes already do,
+-- at the same cost, and is recorded rather than optimised here.
+
+REMOVE FUNCTION IF EXISTS fn::text_search;
+
+DEFINE FUNCTION IF NOT EXISTS fn::text_search($query_text: string, $match_count: int, $sources: bool, $show_notes: bool, $notebooks: array) {
+
+    let $accessible_sources = (SELECT VALUE in FROM reference WHERE out IN $notebooks);
+    let $accessible_notes = (SELECT VALUE in FROM artifact WHERE out IN $notebooks);
+
+    let $source_title_search =
+        IF $sources {(
+            SELECT id, title,
+            search::highlight('`', '`', 1) as content,
+            id as parent_id,
+            math::max(search::score(1)) AS relevance
+            FROM source
+            WHERE title @1@ $query_text AND id IN $accessible_sources
+            GROUP BY id)}
+        ELSE { [] };
+
+    let $source_embedding_search =
+         IF $sources {(
+            SELECT source.id as id, source.title as title, search::highlight('`', '`', 1) as content, source.id as parent_id, math::max(search::score(1)) AS relevance
+            FROM source_embedding
+            WHERE content @1@ $query_text AND source IN $accessible_sources
+            GROUP BY id)}
+        ELSE { [] };
+
+    let $source_full_search =
+         IF $sources {(
+            SELECT id, title, search::highlight('`', '`', 1) as content, id as parent_id, math::max(search::score(1)) AS relevance
+            FROM source
+            WHERE full_text @1@ $query_text AND id IN $accessible_sources
+            GROUP BY id)}
+        ELSE { [] };
+
+    let $source_insight_search =
+         IF $sources {(
+             SELECT id, insight_type + " - " + (source.title OR '') as title, search::highlight('`', '`', 1) as content, id as parent_id,  math::max(search::score(1)) AS relevance
+            FROM source_insight
+            WHERE content @1@ $query_text AND source IN $accessible_sources
+            GROUP BY id)}
+        ELSE { [] };
+
+    let $note_title_search =
+         IF $show_notes {(
+             SELECT id, title, search::highlight('`', '`', 1) as content,  id as parent_id, math::max(search::score(1)) AS relevance
+            FROM note
+            WHERE title @1@ $query_text AND id IN $accessible_notes
+            GROUP BY id)}
+        ELSE { [] };
+
+     let $note_content_search =
+         IF $show_notes {(
+             SELECT id, title, search::highlight('`', '`', 1) as content,  id as parent_id, math::max(search::score(1)) AS relevance
+            FROM note
+            WHERE content @1@ $query_text AND id IN $accessible_notes
+            GROUP BY id)}
+        ELSE { [] };
+
+    let $source_chunk_results = array::union($source_embedding_search, $source_full_search);
+
+    let $source_asset_results = array::union($source_title_search, $source_insight_search);
+
+    let $source_results = array::union($source_chunk_results, $source_asset_results );
+    let $note_results = array::union($note_title_search, $note_content_search );
+    let $final_results = array::union($source_results, $note_results );
+
+        RETURN (select id, parent_id, title, math::max(relevance) as relevance
+        from $final_results where id is not None
+        group by id, parent_id, title ORDER BY relevance DESC LIMIT $match_count);
+
+};
+
+
+REMOVE FUNCTION IF EXISTS fn::vector_search;
+
+DEFINE FUNCTION IF NOT EXISTS fn::vector_search($query: array<float>, $match_count: int, $sources: bool, $show_notes: bool, $min_similarity: float, $notebooks: array) {
+
+    let $accessible_sources = (SELECT VALUE in FROM reference WHERE out IN $notebooks);
+    let $accessible_notes = (SELECT VALUE in FROM artifact WHERE out IN $notebooks);
+
+    let $source_embedding_search =
+        IF $sources {(
+            SELECT
+                source.id as id,
+                source.title as title,
+                content,
+                source.id as parent_id,
+                vector::similarity::cosine(embedding, $query) as similarity
+            FROM source_embedding
+            WHERE embedding != none and array::len(embedding)=array::len($query) AND
+                 vector::similarity::cosine(embedding, $query) >= $min_similarity
+                 AND source IN $accessible_sources
+            ORDER BY similarity DESC
+            LIMIT $match_count
+        )}
+        ELSE { [] };
+
+    let $source_insight_search =
+        IF $sources {(
+            SELECT
+                id,
+                insight_type + ' - ' + (source.title OR '') as title,
+                content,
+                source.id as parent_id,
+                vector::similarity::cosine(embedding, $query) as similarity
+            FROM source_insight
+             WHERE embedding != none and array::len(embedding)=array::len($query) AND
+            vector::similarity::cosine(embedding, $query) >= $min_similarity
+            AND source IN $accessible_sources
+            ORDER BY similarity DESC
+            LIMIT $match_count
+        )}
+        ELSE { [] };
+
+
+    let $note_content_search =
+        IF $show_notes {(
+            SELECT
+                id,
+                title,
+                content,
+                id as parent_id,
+                vector::similarity::cosine(embedding, $query) as similarity
+            FROM note
+            WHERE embedding != none and array::len(embedding)=array::len($query) AND
+            vector::similarity::cosine(embedding, $query) >= $min_similarity
+            AND id IN $accessible_notes
+            ORDER BY similarity DESC
+            LIMIT $match_count
+        )}
+        ELSE { [] };
+
+
+    let $all_results = array::union(
+        array::union($source_embedding_search, $source_insight_search),
+        $note_content_search
+    );
+
+
+    RETURN (select id, parent_id, title, math::max(similarity) as similarity,
+    array::flatten(content) as matches
+    from $all_results where id is not None
+    group by id, parent_id, title ORDER BY similarity DESC LIMIT $match_count);
+
+};

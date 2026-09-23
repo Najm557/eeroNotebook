@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from loguru import logger
 from pydantic import BaseModel
@@ -11,11 +11,30 @@ from api.podcast_service import (
     PodcastService,
 )
 from open_notebook.ai.models import Model
-from open_notebook.exceptions import OpenNotebookError
+from open_notebook.domain.access import require_notebook_write
+from open_notebook.domain.member import Member
+from open_notebook.exceptions import InvalidInputError, OpenNotebookError
+from open_notebook.identity import current_member
 from open_notebook.podcasts.audio_paths import resolve_contained_audio_path
 from open_notebook.podcasts.models import PodcastEpisode
 
 router = APIRouter()
+
+# Podcasts are a v1 Non-Goal (see the spec's requirements), and this router is the
+# one place where 6.2's scoping stops short. `episode` is SCHEMAFULL and carries
+# no notebook reference and no owner, so the five routes that address an episode -
+# list, get, audio, retry, delete - have nothing to resolve an access check
+# against. An episode's `content` field is a verbatim copy of the notebook's
+# source text at generation time, so the list route discloses another member's
+# material.
+#
+# What is enforced here is the entry: generation from a notebook requires
+# ownership of it, so no episode can be created holding content its creator could
+# not read, and generation from caller-supplied content is unchanged since that
+# content came from the caller. The existing-episode routes need an owner on
+# `episode`, which is a migration and belongs to a task that owns one. The live
+# deployment has never generated an episode (tasks 2.4 and 3.5 measured zero), so
+# the current exposure is nil rather than merely small.
 
 # Model reference fields stored in the denormalized profile snapshots on an
 # episode, mapped to the resolved display fields the frontend renders
@@ -122,12 +141,28 @@ class PodcastEpisodeResponse(BaseModel):
 
 
 @router.post("/podcasts/generate", response_model=PodcastGenerationResponse)
-async def generate_podcast(request: PodcastGenerationRequest):
+async def generate_podcast(
+    request: PodcastGenerationRequest,
+    member: Member = Depends(current_member),
+):
     """
     Generate a podcast episode using Episode Profiles.
     Returns immediately with job ID for status tracking.
+
+    Generating from a notebook requires owning it: the job reads every source in
+    that notebook into the episode's stored content, which is a read of the whole
+    collection and a write of a derived copy of it.
     """
     try:
+        if request.notebook_id:
+            await require_notebook_write(member, request.notebook_id)
+        elif not request.content:
+            # PodcastService raises the same condition, but only after the access
+            # branch above has been skipped. Named here so a request with neither
+            # cannot reach generation unscoped.
+            raise InvalidInputError(
+                "Either content or notebook_id is required"
+            )
         job_id = await PodcastService.submit_generation_job(
             episode_profile_name=request.episode_profile,
             speaker_profile_name=request.speaker_profile,

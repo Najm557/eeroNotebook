@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 
 from api.models import (
@@ -12,12 +12,21 @@ from api.models import (
     RecentlyViewedResponse,
 )
 from open_notebook.database.repository import ensure_record_id, repo_query
+from open_notebook.domain.access import (
+    accessible_notebook_records,
+    require_notebook_read,
+    require_notebook_write,
+    require_source_write,
+    role_from_owner,
+)
+from open_notebook.domain.member import Member
 from open_notebook.domain.notebook import Notebook, Source
 from open_notebook.exceptions import (
     InvalidInputError,
     NotFoundError,
     OpenNotebookError,
 )
+from open_notebook.identity import current_member
 
 router = APIRouter()
 
@@ -62,8 +71,15 @@ def _recently_viewed_source(row: dict) -> RecentlyViewedResponse:
 async def get_notebooks(
     archived: Optional[bool] = Query(None, description="Filter by archived status"),
     order_by: str = Query("updated desc", description="Order by field and direction"),
+    member: Member = Depends(current_member),
 ):
-    """Get all notebooks with optional filtering and ordering."""
+    """Get the notebooks this member owns or holds a Share on.
+
+    Requirement 5.5. The scope is applied inside the query rather than to its
+    result: filtering afterwards would still have read every member's rows, and
+    the next person to add a projection or a count would be computing it over
+    material the caller cannot see.
+    """
     try:
         # Validate order_by against allowlist to prevent SurrealQL injection
         allowed_fields = {"name", "created", "updated"}
@@ -90,21 +106,34 @@ async def get_notebooks(
                 detail=f"Invalid order_by format: '{order_by}'. Expected 'field' or 'field direction'",
             )
 
+        accessible = await accessible_notebook_records(member)
+
         # Build the query with counts
         query = f"""
             SELECT *,
             count(<-reference.in) as source_count,
             count(<-artifact.in) as note_count
             FROM notebook
+            WHERE id IN $accessible_notebooks
             ORDER BY {validated_order_by}
         """
 
-        result = await repo_query(query)
+        result = await repo_query(query, {"accessible_notebooks": accessible})
 
         # Filter by archived status if specified
         if archived is not None:
             result = [nb for nb in result if nb.get("archived") == archived]
 
+        # Each row already carries `owner`, so the caller's role is derived from it
+        # rather than by re-asking `notebook_access` twice per row (spec task 6.3).
+        #
+        # A row whose role resolves to None is dropped, and that is a narrowing
+        # rather than a new rule: an unowned notebook is reachable by nobody, so
+        # `notebook_access` already answers 404 for it. Only a Share pointing at an
+        # unowned notebook can produce one here, which task 6.2 logs and ignores,
+        # and listing it would mean inventing a role for a notebook that 404s on
+        # open - a claim the UI would act on.
+        scoped = [(nb, role_from_owner(member, nb.get("owner"))) for nb in result]
         return [
             NotebookResponse(
                 id=str(nb.get("id", "")),
@@ -115,8 +144,10 @@ async def get_notebooks(
                 updated=str(nb.get("updated", "")),
                 source_count=nb.get("source_count", 0),
                 note_count=nb.get("note_count", 0),
+                role=role.value,
             )
-            for nb in result
+            for nb, role in scoped
+            if role is not None
         ]
     except HTTPException:
         raise
@@ -130,12 +161,31 @@ async def get_notebooks(
 
 
 @router.post("/notebooks", response_model=NotebookResponse)
-async def create_notebook(notebook: NotebookCreate):
-    """Create a new notebook."""
+async def create_notebook(
+    notebook: NotebookCreate,
+    member: Member = Depends(current_member),
+):
+    """Create a new notebook owned by the member creating it (Requirement 5.1).
+
+    The owner comes from the resolved caller and never from the request body:
+    a member id accepted from a client would let anyone create a Notebook owned
+    by somebody else, which is ownership assignment by the unauthenticated half
+    of the request.
+    """
     try:
+        if not member.id:
+            # Unreachable through the API - MemberAuthMiddleware refuses an
+            # unresolved caller and Member.resolve persists before returning -
+            # but a Notebook saved without an owner is reachable by nobody, so
+            # this refuses rather than creating one.
+            raise InvalidInputError(
+                "Cannot create a notebook without a resolved member"
+            )
+
         new_notebook = Notebook(
             name=notebook.name,
             description=notebook.description,
+            owner=member.id,
         )
         await new_notebook.save()
 
@@ -148,6 +198,8 @@ async def create_notebook(notebook: NotebookCreate):
             updated=str(new_notebook.updated),
             source_count=0,  # New notebook has no sources
             note_count=0,  # New notebook has no notes
+            # The creator is the owner by construction (Requirement 5.1).
+            role="owner",
         )
     except InvalidInputError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -165,28 +217,37 @@ async def create_notebook(notebook: NotebookCreate):
 @router.get("/recently-viewed", response_model=List[RecentlyViewedResponse])
 async def get_recently_viewed(
     limit: int = Query(12, ge=1, le=50, description="Number of items to return"),
+    member: Member = Depends(current_member),
 ):
-    """Get recently viewed notebooks and sources, newest first."""
+    """Get recently viewed notebooks and sources, newest first.
+
+    Scoped to the member's own access on both halves. A source is included by
+    the Notebooks that reference it, not by its own timestamp, since a source
+    carries no owner of its own (Requirement 5.3).
+    """
     try:
+        accessible = await accessible_notebook_records(member)
+
         notebooks = await repo_query(
             """
             SELECT id, name AS title, last_viewed_at
             FROM notebook
-            WHERE last_viewed_at != NONE AND last_viewed_at != NULL
+            WHERE id IN $accessible_notebooks
+              AND last_viewed_at != NONE AND last_viewed_at != NULL
             ORDER BY last_viewed_at DESC
             LIMIT $limit
             """,
-            {"limit": limit},
+            {"limit": limit, "accessible_notebooks": accessible},
         )
         sources = await repo_query(
             """
             SELECT id, title, last_viewed_at
-            FROM source
+            FROM (SELECT VALUE in FROM reference WHERE out IN $accessible_notebooks)
             WHERE last_viewed_at != NONE AND last_viewed_at != NULL
             ORDER BY last_viewed_at DESC
             LIMIT $limit
             """,
-            {"limit": limit},
+            {"limit": limit, "accessible_notebooks": accessible},
         )
 
         items = [
@@ -211,9 +272,16 @@ async def get_recently_viewed(
 @router.get(
     "/notebooks/{notebook_id}/delete-preview", response_model=NotebookDeletePreview
 )
-async def get_notebook_delete_preview(notebook_id: str):
+async def get_notebook_delete_preview(
+    notebook_id: str,
+    member: Member = Depends(current_member),
+):
     """Get a preview of what will be deleted when this notebook is deleted."""
     try:
+        # Owner only: the preview counts a notebook's notes and sources, so a
+        # Viewer reading it would learn the size of a collection they cannot
+        # delete anyway.
+        await require_notebook_write(member, notebook_id)
         notebook = await Notebook.get(notebook_id)
 
         preview = await notebook.get_delete_preview()
@@ -240,9 +308,19 @@ async def get_notebook_delete_preview(notebook_id: str):
 
 
 @router.get("/notebooks/{notebook_id}", response_model=NotebookResponse)
-async def get_notebook(notebook_id: str):
-    """Get a specific notebook by ID."""
+async def get_notebook(
+    notebook_id: str,
+    member: Member = Depends(current_member),
+):
+    """Get a specific notebook by ID.
+
+    The response carries the caller's role, which is what lets the UI stop
+    offering a Viewer actions the API will refuse (spec task 6.3). It comes from
+    the access check that already ran, not from a second lookup.
+    """
     try:
+        access = await require_notebook_read(member, notebook_id)
+
         # Query with counts for single notebook
         query = """
             SELECT *,
@@ -267,6 +345,7 @@ async def get_notebook(notebook_id: str):
             updated=str(nb.get("updated", "")),
             source_count=nb.get("source_count", 0),
             note_count=nb.get("note_count", 0),
+            role=access.granted_role.value,
         )
     except HTTPException:
         raise
@@ -280,12 +359,20 @@ async def get_notebook(notebook_id: str):
 
 
 @router.put("/notebooks/{notebook_id}", response_model=NotebookResponse)
-async def update_notebook(notebook_id: str, notebook_update: NotebookUpdate):
-    """Update a notebook."""
+async def update_notebook(
+    notebook_id: str,
+    notebook_update: NotebookUpdate,
+    member: Member = Depends(current_member),
+):
+    """Update a notebook. Owner only (Requirement 5.2)."""
     try:
+        await require_notebook_write(member, notebook_id)
         notebook = await Notebook.get(notebook_id)
 
-        # Update only provided fields
+        # Update only provided fields. `owner` is deliberately not among them:
+        # NotebookUpdate carries no owner field, and transferring ownership is
+        # not a v1 capability. Saving without one cannot unown the notebook -
+        # repo_update MERGEs, so the absent key leaves the stored owner alone.
         if notebook_update.name is not None:
             notebook.name = notebook_update.name
         if notebook_update.description is not None:
@@ -315,6 +402,8 @@ async def update_notebook(notebook_id: str, notebook_update: NotebookUpdate):
                 updated=str(nb.get("updated", "")),
                 source_count=nb.get("source_count", 0),
                 note_count=nb.get("note_count", 0),
+                # Only the owner reaches this route at all.
+                role="owner",
             )
 
         # Fallback if query fails
@@ -327,6 +416,7 @@ async def update_notebook(notebook_id: str, notebook_update: NotebookUpdate):
             updated=str(notebook.updated),
             source_count=0,
             note_count=0,
+            role="owner",
         )
     except HTTPException:
         raise
@@ -344,9 +434,22 @@ async def update_notebook(notebook_id: str, notebook_update: NotebookUpdate):
 
 
 @router.post("/notebooks/{notebook_id}/sources/{source_id}")
-async def add_source_to_notebook(notebook_id: str, source_id: str):
-    """Add an existing source to a notebook (create the reference)."""
+async def add_source_to_notebook(
+    notebook_id: str,
+    source_id: str,
+    member: Member = Depends(current_member),
+):
+    """Add an existing source to a notebook (create the reference).
+
+    Both ends are owner-checked, and that is what stops the obvious escalation:
+    with a read-only check on the source, a Viewer could link a source out of
+    somebody else's notebook into one of their own, become an owner of a
+    notebook containing it, and then delete it.
+    """
     try:
+        await require_notebook_write(member, notebook_id)
+        await require_source_write(member, source_id)
+
         # Verify the notebook and source exist (raises NotFoundError -> 404)
         await Notebook.get(notebook_id)
         await Source.get(source_id)
@@ -387,11 +490,36 @@ async def add_source_to_notebook(notebook_id: str, source_id: str):
 
 
 @router.delete("/notebooks/{notebook_id}/sources/{source_id}")
-async def remove_source_from_notebook(notebook_id: str, source_id: str):
-    """Remove a source from a notebook (delete the reference)."""
+async def remove_source_from_notebook(
+    notebook_id: str,
+    source_id: str,
+    member: Member = Depends(current_member),
+):
+    """Remove a source from a notebook (delete the reference).
+
+    Refuses when this is the source's last notebook. A source belonging to no
+    notebook inherits access from nothing, so it becomes unreadable and
+    undeletable through the API - the ongoing orphaning task 6.1 measured.
+    """
     try:
+        await require_notebook_write(member, notebook_id)
+
         # Verify the notebook exists (raises NotFoundError -> 404)
         await Notebook.get(notebook_id)
+
+        remaining = await repo_query(
+            "SELECT VALUE out FROM reference WHERE in = $source_id AND out != $notebook_id",
+            {
+                "notebook_id": ensure_record_id(notebook_id),
+                "source_id": ensure_record_id(source_id),
+            },
+        )
+        if not remaining:
+            raise InvalidInputError(
+                "This is the only notebook holding that source, so unlinking it "
+                "would leave it in no notebook and reachable by nobody. Add it to "
+                "another notebook first, or delete the source."
+            )
 
         # Delete the reference record linking source to notebook
         await repo_query(
@@ -407,6 +535,8 @@ async def remove_source_from_notebook(notebook_id: str, source_id: str):
         raise
     except NotFoundError:
         raise HTTPException(status_code=404, detail="Notebook not found")
+    except InvalidInputError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except OpenNotebookError:
         raise
     except Exception as e:
@@ -423,18 +553,56 @@ async def delete_notebook(
     notebook_id: str,
     delete_exclusive_sources: bool = Query(
         False,
-        description="Whether to delete sources that belong only to this notebook",
+        description=(
+            "Whether to delete sources that belong only to this notebook. "
+            "False is refused when the notebook holds such sources: they would "
+            "belong to no notebook and become unreachable."
+        ),
     ),
+    member: Member = Depends(current_member),
 ):
     """
-    Delete a notebook with cascade deletion.
+    Delete a notebook with cascade deletion. Owner only (Requirement 5.2).
 
     Always deletes all notes associated with the notebook.
-    If delete_exclusive_sources is True, also deletes sources that belong only
-    to this notebook (not linked to any other notebooks).
+
+    **The exclusive-source decision task 6.1 handed to 6.2.** Deleting a notebook
+    makes SurrealDB delete the `reference` edges and keep the sources, so a source
+    referenced only by this notebook survives in no notebook at all. Under
+    inherited access that source is reachable by nobody: it cannot be read,
+    edited or deleted through the API by any member, including the operator.
+    Migration 25 swept the orphans that already existed and explicitly could not
+    prevent the next one.
+
+    Three options were on the table. Silently deleting exclusive sources
+    regardless of the flag destroys content a member asked to keep, which is the
+    failure migration 25 refused to accept when it adopted orphans rather than
+    deleting them. Adopting them into a per-member recovery notebook works but
+    invents product surface - an auto-created notebook nobody asked for - on a
+    decision this task should not be making alone. So: **the request is refused
+    when it would strand a source**, with 400 naming the remedy. Nothing is
+    destroyed, nothing is invented, and the member who can fix it is told how.
+    `delete_exclusive_sources=true` still deletes them, and a notebook whose
+    sources are all shared with other notebooks still unlinks cleanly.
+
+    `Notebook.delete()`'s own default stays at upstream's `False`. The rule
+    belongs at the API boundary where a member is making the choice, not in a
+    domain method also called by background jobs (Requirement 14.3).
     """
     try:
+        await require_notebook_write(member, notebook_id)
         notebook = await Notebook.get(notebook_id)
+
+        if not delete_exclusive_sources:
+            preview = await notebook.get_delete_preview()
+            if preview["exclusive_source_count"] > 0:
+                raise InvalidInputError(
+                    f"{preview['exclusive_source_count']} source(s) exist only in "
+                    "this notebook. Keeping them would leave them in no notebook, "
+                    "where no member can read or delete them. Delete them with the "
+                    "notebook (delete_exclusive_sources=true), or add them to "
+                    "another notebook first."
+                )
 
         result = await notebook.delete(
             delete_exclusive_sources=delete_exclusive_sources
@@ -451,6 +619,8 @@ async def delete_notebook(
         raise
     except NotFoundError:
         raise HTTPException(status_code=404, detail="Notebook not found")
+    except InvalidInputError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except OpenNotebookError:
         raise
     except Exception as e:

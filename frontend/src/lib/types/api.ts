@@ -1,3 +1,6 @@
+/** What the caller may do on a notebook. `owner` edits, `viewer` only reads. */
+export type NotebookRole = 'owner' | 'viewer'
+
 export interface NotebookResponse {
   id: string
   name: string
@@ -7,6 +10,24 @@ export interface NotebookResponse {
   updated: string
   source_count: number
   note_count: number
+  // The caller's own role. Not the owner's identity - the UI only needs to know
+  // which actions to offer, and offering one the API will refuse is the bug this
+  // field exists to prevent.
+  role: NotebookRole
+}
+
+export interface ShareResponse {
+  notebook_id: string
+  member_id: string
+  /** Absent only if the member record vanished without its share. */
+  email?: string | null
+  role: 'viewer'
+  created: string
+}
+
+/** One address. There is deliberately no plural form (Requirement 6.6). */
+export interface CreateShareRequest {
+  email: string
 }
 
 export interface NoteResponse {

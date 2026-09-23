@@ -1,12 +1,54 @@
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel, Field
 from surreal_commands import registry
 
 from api.command_service import CommandService
-from open_notebook.exceptions import OpenNotebookError
+from open_notebook.domain.access import (
+    require_note_read,
+    require_notebook_read,
+    require_source_read,
+)
+from open_notebook.domain.member import Member
+from open_notebook.exceptions import (
+    AccessDeniedError,
+    NotFoundError,
+    OpenNotebookError,
+)
+from open_notebook.identity import current_member
+
+# A command job record carries no notebook reference, so there is nothing for an
+# access check to resolve: `command` has only app, args, context, error_message,
+# id, name, result and status. Three of this router's routes therefore cannot be
+# scoped, and each of them reaches content across every member:
+#
+# - POST /commands/jobs submits any registered command with any arguments, which
+#   is a write path into anybody's sources and notes that bypasses every scoped
+#   route in the API.
+# - GET /commands/jobs lists jobs with their args and results. A `run_transformation`
+#   result is insight text and its args name a source id, so the list discloses
+#   other members' material.
+# - DELETE /commands/jobs/{id} cancels somebody else's job.
+#
+# All three are closed rather than left open (spec task 6.2). Every capability
+# POST reached has a scoped route of its own - /sources, /sources/{id}/retry,
+# /sources/{id}/insights, /embed, /embeddings/rebuild, /podcasts/generate - so
+# nothing is lost, and the frontend uses none of the three.
+#
+# GET /commands/jobs/{job_id} is now scoped rather than open, and without the
+# migration task 6.2 expected it to need. An owner column on `command` would have
+# to be written by this application after submit_command() returns, racing the
+# worker that is already processing the row; resolving the job back to the content
+# it names needs no schema change and no second write. See
+# CommandService.content_for_job. A job that names no member content is refused,
+# so there is no "unscopable, therefore allowed" branch.
+_UNSCOPABLE = (
+    "This endpoint is not available: a command job carries no notebook, so "
+    "ownership cannot be enforced on it. Use the endpoint for the specific "
+    "action instead - sources, insights, embeddings or podcasts."
+)
 
 router = APIRouter()
 
@@ -53,34 +95,39 @@ async def execute_command(request: CommandExecutionRequest):
         }
     }
     """
-    try:
-        # Submit command using app name (not module name)
-        job_id = await CommandService.submit_command_job(
-            module_name=request.app,  # This should be "open_notebook"
-            command_name=request.command,
-            command_args=request.input,
-        )
-
-        return CommandJobResponse(
-            job_id=job_id,
-            status="submitted",
-            message=f"Command '{request.command}' submitted successfully",
-        )
-
-    except HTTPException:
-        raise
-    except OpenNotebookError:
-        raise
-    except Exception as e:
-        logger.error(f"Error submitting command: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail="Failed to submit command"
-        )
+    raise AccessDeniedError(_UNSCOPABLE)
 
 
 @router.get("/commands/jobs/{job_id}", response_model=CommandJobStatusResponse)
-async def get_command_job_status(job_id: str):
-    """Get the status of a specific command job"""
+async def get_command_job_status(
+    job_id: str, member: Member = Depends(current_member)
+):
+    """Get the status of a command job about content this member can read.
+
+    A job's `result` can be insight text and its `error_message` can quote source
+    content, so this answers only for a caller who could read that content
+    directly.
+
+    Every refusal is 404 with one message, whatever the reason - no such job, a
+    job about somebody else's source, a job about nothing scopable. A 403, or a
+    404 whose wording differed per case, would confirm the job exists and hint at
+    what it touched (Requirement 7.4).
+    """
+    content = await CommandService.content_for_job(job_id)
+    if content is None:
+        raise NotFoundError("Job not found")
+
+    kind, record_id = content
+    checks = {
+        "source": require_source_read,
+        "note": require_note_read,
+        "notebook": require_notebook_read,
+    }
+    try:
+        await checks[kind](member, record_id)
+    except NotFoundError:
+        raise NotFoundError("Job not found") from None
+
     try:
         status_data = await CommandService.get_command_status(job_id)
         return CommandJobStatusResponse(**status_data)
@@ -103,39 +150,13 @@ async def list_command_jobs(
     limit: int = Query(50, description="Maximum number of jobs to return"),
 ):
     """List command jobs with optional filtering"""
-    try:
-        jobs = await CommandService.list_command_jobs(
-            command_filter=command_filter, status_filter=status_filter, limit=limit
-        )
-        return jobs
-
-    except HTTPException:
-        raise
-    except OpenNotebookError:
-        raise
-    except Exception as e:
-        logger.error(f"Error listing command jobs: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail="Failed to list command jobs"
-        )
+    raise AccessDeniedError(_UNSCOPABLE)
 
 
 @router.delete("/commands/jobs/{job_id}")
 async def cancel_command_job(job_id: str):
     """Cancel a running command job"""
-    try:
-        success = await CommandService.cancel_command_job(job_id)
-        return {"job_id": job_id, "cancelled": success}
-
-    except HTTPException:
-        raise
-    except OpenNotebookError:
-        raise
-    except Exception as e:
-        logger.error(f"Error cancelling command job: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail="Failed to cancel command job"
-        )
+    raise AccessDeniedError(_UNSCOPABLE)
 
 
 @router.get("/commands/registry/debug")

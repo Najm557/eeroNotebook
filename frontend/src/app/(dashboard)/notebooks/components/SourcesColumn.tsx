@@ -38,6 +38,13 @@ interface SourcesColumnProps {
   hasNextPage?: boolean
   isFetchingNextPage?: boolean
   fetchNextPage?: () => void
+  /**
+   * Whether the caller owns this notebook. Adding, deleting, unlinking and
+   * retrying a source are all owner-only on the API (Requirements 5.2 and 6.4),
+   * so a Viewer is offered none of them - reading a source and using it as chat
+   * context is the whole of their access (Requirement 6.3).
+   */
+  canEdit?: boolean
 }
 
 export function SourcesColumn({
@@ -51,6 +58,7 @@ export function SourcesColumn({
   hasNextPage,
   isFetchingNextPage,
   fetchNextPage,
+  canEdit = true,
 }: SourcesColumnProps) {
   const { t } = useTranslation()
   const [dropdownOpen, setDropdownOpen] = useState(false)
@@ -182,25 +190,27 @@ export function SourcesColumn({
                     </DropdownMenuContent>
                   </DropdownMenu>
                 )}
-                <DropdownMenu open={dropdownOpen} onOpenChange={setDropdownOpen}>
-                  <DropdownMenuTrigger asChild>
-                    <Button size="sm">
-                      <Plus className="h-4 w-4 mr-2" />
-                      {t('sources.addSource')}
-                      <ChevronDown className="h-4 w-4 ml-2" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => { setDropdownOpen(false); setAddDialogOpen(true); }}>
-                      <Plus className="h-4 w-4 mr-2" />
-                      {t('sources.addSource')}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => { setDropdownOpen(false); setAddExistingDialogOpen(true); }}>
-                      <Link2 className="h-4 w-4 mr-2" />
-                      {t('sources.addExistingTitle')}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                {canEdit && (
+                  <DropdownMenu open={dropdownOpen} onOpenChange={setDropdownOpen}>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="sm">
+                        <Plus className="h-4 w-4 mr-2" />
+                        {t('sources.addSource')}
+                        <ChevronDown className="h-4 w-4 ml-2" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => { setDropdownOpen(false); setAddDialogOpen(true); }}>
+                        <Plus className="h-4 w-4 mr-2" />
+                        {t('sources.addSource')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => { setDropdownOpen(false); setAddExistingDialogOpen(true); }}>
+                        <Link2 className="h-4 w-4 mr-2" />
+                        {t('sources.addExistingTitle')}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
                 {collapseButton}
               </div>
             </div>
@@ -215,7 +225,11 @@ export function SourcesColumn({
               <EmptyState
                 icon={FileText}
                 title={t('sources.noSourcesYet')}
-                description={t('sources.createFirstSource')}
+                description={
+                  canEdit
+                    ? t('sources.createFirstSource')
+                    : t('sources.noSourcesViewer')
+                }
               />
             ) : (
               <div className="space-y-3">
@@ -229,7 +243,8 @@ export function SourcesColumn({
                     onRefreshContent={handleRetry}
                     onRemoveFromNotebook={handleRemoveFromNotebook}
                     onRefresh={onRefresh}
-                    showRemoveFromNotebook={true}
+                    showRemoveFromNotebook={canEdit}
+                    canEdit={canEdit}
                     contextMode={contextSelections?.[source.id]}
                     onContextModeChange={onContextModeChange
                       ? (mode) => onContextModeChange(source.id, mode)
@@ -249,18 +264,22 @@ export function SourcesColumn({
         </Card>
       </CollapsibleColumn>
 
-      <AddSourceDialog
-        open={addDialogOpen}
-        onOpenChange={setAddDialogOpen}
-        defaultNotebookId={notebookId}
-      />
+      {canEdit && (
+        <>
+          <AddSourceDialog
+            open={addDialogOpen}
+            onOpenChange={setAddDialogOpen}
+            defaultNotebookId={notebookId}
+          />
 
-      <AddExistingSourceDialog
-        open={addExistingDialogOpen}
-        onOpenChange={setAddExistingDialogOpen}
-        notebookId={notebookId}
-        onSuccess={onRefresh}
-      />
+          <AddExistingSourceDialog
+            open={addExistingDialogOpen}
+            onOpenChange={setAddExistingDialogOpen}
+            notebookId={notebookId}
+            onSuccess={onRefresh}
+          />
+        </>
+      )}
 
       <ConfirmDialog
         open={deleteDialogOpen}

@@ -91,8 +91,12 @@ class TestRecentlyViewedApi:
         data = response.json()
         assert [item["id"] for item in data] == ["source:1", "notebook:1"]
         assert len(data) == 2
-        assert mock_repo_query.await_args_list[0].args[1] == {"limit": 2}
-        assert mock_repo_query.await_args_list[1].args[1] == {"limit": 2}
+        # Both halves also carry the member's accessible notebooks, bound rather
+        # than interpolated (spec task 6.2). The list is empty here because the
+        # test bypass in conftest stands in for the access lookup.
+        for call in mock_repo_query.await_args_list[:2]:
+            assert call.args[1]["limit"] == 2
+            assert call.args[1]["accessible_notebooks"] == []
 
     @patch("api.routers.notebooks.repo_query", new_callable=AsyncMock)
     def test_recently_viewed_empty_when_no_view_history(self, mock_repo_query, client):

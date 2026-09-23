@@ -1,12 +1,13 @@
 import json
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
 from api.models import AskRequest, AskResponse, SearchRequest, SearchResponse
 from open_notebook.ai.models import Model, model_manager
+from open_notebook.domain.member import Member
 from open_notebook.domain.notebook import text_search, vector_search
 from open_notebook.exceptions import (
     DatabaseOperationError,
@@ -14,13 +15,23 @@ from open_notebook.exceptions import (
     OpenNotebookError,
 )
 from open_notebook.graphs.ask import graph as ask_graph
+from open_notebook.identity import current_member
 
 router = APIRouter()
 
 
 @router.post("/search", response_model=SearchResponse)
-async def search_knowledge_base(search_request: SearchRequest):
-    """Search the knowledge base using text or vector search."""
+async def search_knowledge_base(
+    search_request: SearchRequest, member: Member = Depends(current_member)
+):
+    """Search the sources and notes this member can reach.
+
+    Requirement 7.3. The member is passed down to the query rather than used to
+    filter what comes back: `text_search` and `vector_search` bind the accessible
+    Notebooks into the SurrealQL, so `total_count` and the relevance ordering are
+    computed over this member's material only. Filtering here would leave both
+    derived from everybody's.
+    """
     try:
         if search_request.type == "vector":
             # Check if embedding model is available for vector search
@@ -36,6 +47,7 @@ async def search_knowledge_base(search_request: SearchRequest):
                 source=search_request.search_sources,
                 note=search_request.search_notes,
                 minimum_score=search_request.minimum_score,
+                member=member,
             )
         else:
             # Text search
@@ -44,6 +56,7 @@ async def search_knowledge_base(search_request: SearchRequest):
                 results=search_request.limit,
                 source=search_request.search_sources,
                 note=search_request.search_notes,
+                member=member,
             )
 
         return SearchResponse(
@@ -67,7 +80,11 @@ async def search_knowledge_base(search_request: SearchRequest):
 
 
 async def stream_ask_response(
-    question: str, strategy_model: Model, answer_model: Model, final_answer_model: Model
+    question: str,
+    strategy_model: Model,
+    answer_model: Model,
+    final_answer_model: Model,
+    member: Member,
 ) -> AsyncGenerator[str, None]:
     """Stream the ask response as Server-Sent Events."""
     try:
@@ -82,6 +99,10 @@ async def stream_ask_response(
                     strategy_model=strategy_model.id,
                     answer_model=answer_model.id,
                     final_answer_model=final_answer_model.id,
+                    # Every search the graph runs is confined to this member's
+                    # notebooks. The graph refuses to run without it rather than
+                    # falling back to an instance-wide search (Requirement 2.4).
+                    member=member,
                 )
             ),
             stream_mode="updates",
@@ -121,8 +142,10 @@ async def stream_ask_response(
 
 
 @router.post("/search/ask")
-async def ask_knowledge_base(ask_request: AskRequest):
-    """Ask the knowledge base a question using AI models."""
+async def ask_knowledge_base(
+    ask_request: AskRequest, member: Member = Depends(current_member)
+):
+    """Ask a question of the sources and notes this member can reach."""
     try:
         # Validate models exist
         strategy_model = await Model.get(ask_request.strategy_model)
@@ -155,7 +178,11 @@ async def ask_knowledge_base(ask_request: AskRequest):
         # For streaming response
         return StreamingResponse(
             stream_ask_response(
-                ask_request.question, strategy_model, answer_model, final_answer_model
+                ask_request.question,
+                strategy_model,
+                answer_model,
+                final_answer_model,
+                member,
             ),
             media_type="text/event-stream",
             headers={
@@ -175,8 +202,10 @@ async def ask_knowledge_base(ask_request: AskRequest):
 
 
 @router.post("/search/ask/simple", response_model=AskResponse)
-async def ask_knowledge_base_simple(ask_request: AskRequest):
-    """Ask the knowledge base a question and return a simple response (non-streaming)."""
+async def ask_knowledge_base_simple(
+    ask_request: AskRequest, member: Member = Depends(current_member)
+):
+    """Ask a question of this member's own material, non-streaming."""
     try:
         # Validate models exist
         strategy_model = await Model.get(ask_request.strategy_model)
@@ -217,6 +246,7 @@ async def ask_knowledge_base_simple(ask_request: AskRequest):
                     strategy_model=strategy_model.id,
                     answer_model=answer_model.id,
                     final_answer_model=final_answer_model.id,
+                    member=member,
                 )
             ),
             stream_mode="updates",

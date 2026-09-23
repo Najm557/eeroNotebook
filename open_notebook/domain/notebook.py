@@ -9,7 +9,9 @@ from surreal_commands import submit_command
 from surrealdb import RecordID
 
 from open_notebook.database.repository import ensure_record_id, repo_query
+from open_notebook.domain.access import accessible_notebook_records
 from open_notebook.domain.base import ObjectModel
+from open_notebook.domain.member import Member
 from open_notebook.exceptions import DatabaseOperationError, InvalidInputError
 
 
@@ -841,17 +843,51 @@ class ChatSession(ObjectModel):
 
 
 async def text_search(
-    keyword: str, results: int, source: bool = True, note: bool = True
+    keyword: str,
+    results: int,
+    source: bool = True,
+    note: bool = True,
+    *,
+    member: Member,
 ):
+    """Full-text search, confined to the Notebooks this member may reach.
+
+    `member` is keyword-only and has no default on purpose. Requirement 7.3 is
+    the kind of rule that fails silently when it fails at all - an unscoped
+    search returns *more* results, which looks like success - so a caller that
+    forgets it gets a TypeError rather than the whole instance (spec task 6.4).
+
+    The scoping happens inside the SurrealQL, in each branch of
+    `fn::text_search` before that branch's LIMIT, not on the rows this function
+    returns. Filtering afterwards still leaks: the count and the relevance
+    ordering are computed across every member's content first, so another
+    member's matches can push this member's own results out of the result set.
+    Measured on a real database - see migration 26.
+    """
     if not keyword:
         raise InvalidInputError("Search keyword cannot be empty")
+
+    # Resolved before the try block, deliberately. Every failure inside that
+    # block becomes a DatabaseOperationError (500), and an access read that
+    # failed must stay an AccessUnavailableError (503): "we could not determine
+    # what you may see" has to remain distinguishable from "your search
+    # matched nothing". access.py never answers an empty set for a failed read,
+    # and this is where that guarantee would otherwise be thrown away.
+    notebooks = await accessible_notebook_records(member)
+
     try:
         search_results = await repo_query(
             """
             select *
-            from fn::text_search($keyword, $results, $source, $note)
+            from fn::text_search($keyword, $results, $source, $note, $notebooks)
             """,
-            {"keyword": keyword, "results": results, "source": source, "note": note},
+            {
+                "keyword": keyword,
+                "results": results,
+                "source": source,
+                "note": note,
+                "notebooks": notebooks,
+            },
         )
         return search_results
     except RuntimeError as e:
@@ -864,7 +900,9 @@ async def text_search(
                 f"Highlight position overflow, falling back to vector search: {str(e)}"
             )
             try:
-                return await vector_search(keyword, results, source, note)
+                return await vector_search(
+                    keyword, results, source, note, member=member
+                )
             except Exception as ve:
                 # Both search paths failed (e.g. no embedding model configured).
                 # Surface the failure instead of returning [] — an empty list would
@@ -888,9 +926,25 @@ async def vector_search(
     source: bool = True,
     note: bool = True,
     minimum_score=0.2,
+    *,
+    member: Member,
 ):
+    """Embedding search, confined to the Notebooks this member may reach.
+
+    Same contract as `text_search`, and the filter placement matters more here:
+    `fn::vector_search` applies LIMIT to each of its three branches as well as to
+    the merged result, so a filter applied afterwards narrows a top-N that was
+    chosen across the whole instance.
+
+    This is the function the ask graph calls, so Requirement 2.4 - no
+    Grounded_Answer drawing on another Notebook's Sources - rests on this scope.
+    """
     if not keyword:
         raise InvalidInputError("Search keyword cannot be empty")
+
+    # Before the try block, for the reason given in text_search.
+    notebooks = await accessible_notebook_records(member)
+
     try:
         from open_notebook.utils.embedding import generate_embedding
 
@@ -898,7 +952,7 @@ async def vector_search(
         embed = await generate_embedding(keyword)
         search_results = await repo_query(
             """
-            SELECT * FROM fn::vector_search($embed, $results, $source, $note, $minimum_score);
+            SELECT * FROM fn::vector_search($embed, $results, $source, $note, $minimum_score, $notebooks);
             """,
             {
                 "embed": embed,
@@ -906,6 +960,7 @@ async def vector_search(
                 "source": source,
                 "note": note,
                 "minimum_score": minimum_score,
+                "notebooks": notebooks,
             },
         )
         return search_results

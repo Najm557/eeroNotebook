@@ -1,15 +1,25 @@
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 
 from api.models import NoteCreate, NoteResponse, NoteUpdate
+from open_notebook.database.repository import repo_query
+from open_notebook.domain.access import (
+    accessible_notebook_records,
+    require_note_read,
+    require_note_write,
+    require_notebook_read,
+    require_notebook_write,
+)
+from open_notebook.domain.member import Member
 from open_notebook.domain.notebook import Note
 from open_notebook.exceptions import (
     InvalidInputError,
     NotFoundError,
     OpenNotebookError,
 )
+from open_notebook.identity import current_member
 
 router = APIRouter()
 
@@ -17,18 +27,32 @@ router = APIRouter()
 @router.get("/notes", response_model=List[NoteResponse])
 async def get_notes(
     notebook_id: Optional[str] = Query(None, description="Filter by notebook ID"),
+    member: Member = Depends(current_member),
 ):
-    """Get all notes with optional notebook filtering."""
+    """Get notes from notebooks this member can read.
+
+    Without a notebook filter this used to return every note in the instance.
+    It now spans the member's own notebooks instead - the filter narrows the
+    scope, it does not create it.
+    """
     try:
         if notebook_id:
-            # Get notes for a specific notebook
             from open_notebook.domain.notebook import Notebook
 
+            await require_notebook_read(member, notebook_id)
             notebook = await Notebook.get(notebook_id)
             notes = await notebook.get_notes()
         else:
-            # Get all notes
-            notes = await Note.get_all(order_by="updated desc")
+            accessible = await accessible_notebook_records(member)
+            rows = await repo_query(
+                """
+                SELECT * OMIT content, embedding
+                FROM (SELECT VALUE in FROM artifact WHERE out IN $accessible_notebooks)
+                ORDER BY updated DESC
+                """,
+                {"accessible_notebooks": accessible},
+            )
+            notes = [Note(**row) for row in rows]
 
         return [
             NoteResponse(
@@ -53,9 +77,26 @@ async def get_notes(
 
 
 @router.post("/notes", response_model=NoteResponse)
-async def create_note(note_data: NoteCreate):
-    """Create a new note."""
+async def create_note(
+    note_data: NoteCreate,
+    member: Member = Depends(current_member),
+):
+    """Create a new note in a notebook the member owns.
+
+    `notebook_id` was optional upstream and is now required. A note belonging to
+    no notebook inherits access from nothing, so it would be unreadable and
+    undeletable the moment it was created - the same ongoing orphaning migration
+    25 had to sweep up. Access is checked before the note is written, not after,
+    so a refused request leaves nothing behind.
+    """
     try:
+        if not note_data.notebook_id:
+            raise InvalidInputError(
+                "notebook_id is required: a note must belong to a notebook to be "
+                "reachable"
+            )
+        await require_notebook_write(member, note_data.notebook_id)
+
         # Auto-generate title if not provided and it's an AI note
         title = note_data.title
         if not title and note_data.note_type == "ai" and note_data.content:
@@ -88,13 +129,7 @@ async def create_note(note_data: NoteCreate):
         )
         command_id = await new_note.save()
 
-        # Add to notebook if specified
-        if note_data.notebook_id:
-            from open_notebook.domain.notebook import Notebook
-
-            # Verify the notebook exists (raises NotFoundError -> 404)
-            await Notebook.get(note_data.notebook_id)
-            await new_note.add_to_notebook(note_data.notebook_id)
+        await new_note.add_to_notebook(note_data.notebook_id)
 
         return NoteResponse(
             id=new_note.id or "",
@@ -119,9 +154,13 @@ async def create_note(note_data: NoteCreate):
 
 
 @router.get("/notes/{note_id}", response_model=NoteResponse)
-async def get_note(note_id: str):
+async def get_note(
+    note_id: str,
+    member: Member = Depends(current_member),
+):
     """Get a specific note by ID."""
     try:
+        await require_note_read(member, note_id)
         note = await Note.get(note_id)
 
         return NoteResponse(
@@ -144,9 +183,14 @@ async def get_note(note_id: str):
 
 
 @router.put("/notes/{note_id}", response_model=NoteResponse)
-async def update_note(note_id: str, note_update: NoteUpdate):
-    """Update a note."""
+async def update_note(
+    note_id: str,
+    note_update: NoteUpdate,
+    member: Member = Depends(current_member),
+):
+    """Update a note. Owner only (Requirements 5.2, 6.4)."""
     try:
+        await require_note_write(member, note_id)
         note = await Note.get(note_id)
 
         # Update only provided fields
@@ -187,9 +231,17 @@ async def update_note(note_id: str, note_update: NoteUpdate):
 
 
 @router.delete("/notes/{note_id}")
-async def delete_note(note_id: str):
-    """Delete a note."""
+async def delete_note(
+    note_id: str,
+    member: Member = Depends(current_member),
+):
+    """Delete a note.
+
+    Owner of every notebook holding it: deleting a note removes it from all of
+    them, so owning one is not permission to remove it from the others.
+    """
     try:
+        await require_note_write(member, note_id, every_notebook=True)
         note = await Note.get(note_id)
 
         await note.delete()

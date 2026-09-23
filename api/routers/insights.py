@@ -1,21 +1,36 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
 from api.models import NoteResponse, SaveAsNoteRequest, SourceInsightResponse
+from open_notebook.domain.access import (
+    require_insight_read,
+    require_insight_write,
+    require_notebook_write,
+)
+from open_notebook.domain.member import Member
 from open_notebook.domain.notebook import SourceInsight
 from open_notebook.exceptions import (
     InvalidInputError,
     NotFoundError,
     OpenNotebookError,
 )
+from open_notebook.identity import current_member
 
 router = APIRouter()
 
 
 @router.get("/insights/{insight_id}", response_model=SourceInsightResponse)
-async def get_insight(insight_id: str):
-    """Get a specific insight by ID."""
+async def get_insight(
+    insight_id: str,
+    member: Member = Depends(current_member),
+):
+    """Get a specific insight by ID.
+
+    An insight carries no owner of its own. It inherits from its source, which
+    inherits from the notebooks referencing it (Requirement 5.3).
+    """
     try:
+        await require_insight_read(member, insight_id)
         insight = await SourceInsight.get(insight_id)
         if not insight:
             raise HTTPException(status_code=404, detail="Insight not found")
@@ -41,9 +56,13 @@ async def get_insight(insight_id: str):
 
 
 @router.delete("/insights/{insight_id}")
-async def delete_insight(insight_id: str):
-    """Delete a specific insight."""
+async def delete_insight(
+    insight_id: str,
+    member: Member = Depends(current_member),
+):
+    """Delete a specific insight. Owner only."""
     try:
+        await require_insight_write(member, insight_id)
         insight = await SourceInsight.get(insight_id)
         if not insight:
             raise HTTPException(status_code=404, detail="Insight not found")
@@ -61,9 +80,28 @@ async def delete_insight(insight_id: str):
 
 
 @router.post("/insights/{insight_id}/save-as-note", response_model=NoteResponse)
-async def save_insight_as_note(insight_id: str, request: SaveAsNoteRequest):
-    """Convert an insight to a note."""
+async def save_insight_as_note(
+    insight_id: str,
+    request: SaveAsNoteRequest,
+    member: Member = Depends(current_member),
+):
+    """Convert an insight to a note.
+
+    `notebook_id` was optional upstream - `SourceInsight.save_as_note()` accepts
+    None and writes a note attached to nothing. That is one of the two paths that
+    kept producing the orphaned content migration 25 had to sweep up, and under
+    inherited access the note would be unreachable the moment it existed. It is
+    now required, and must name a notebook this member owns.
+    """
     try:
+        if not request.notebook_id:
+            raise InvalidInputError(
+                "notebook_id is required: a note must belong to a notebook to be "
+                "reachable"
+            )
+        await require_insight_read(member, insight_id)
+        await require_notebook_write(member, request.notebook_id)
+
         insight = await SourceInsight.get(insight_id)
         if not insight:
             raise HTTPException(status_code=404, detail="Insight not found")

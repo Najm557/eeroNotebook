@@ -42,6 +42,14 @@ interface SourceCardProps {
   onRefresh?: () => void
   className?: string
   showRemoveFromNotebook?: boolean
+  /**
+   * Whether the viewer of this card may change the source. False hides every
+   * owner-only action rather than disabling it: a Viewer of a shared notebook may
+   * read a source and use it as chat context and nothing else (spec task 6.3), and
+   * a disabled "Delete source" still reads as an offer. Defaults to true so the
+   * standalone sources page is unaffected.
+   */
+  canEdit?: boolean
   contextMode?: ContextMode
   onContextModeChange?: (mode: ContextMode) => void
 }
@@ -118,6 +126,7 @@ function SourceCardImpl({
   onRefresh,
   className,
   showRemoveFromNotebook = false,
+  canEdit = true,
   contextMode,
   onContextModeChange
 }: SourceCardProps) {
@@ -313,7 +322,8 @@ function SourceCardImpl({
               />
             )}
 
-            {/* Actions dropdown */}
+            {/* Actions dropdown - every item is a write, so a Viewer gets none */}
+            {canEdit && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -386,11 +396,12 @@ function SourceCardImpl({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+            )}
           </div>
         </div>
         {/* Prominent retry action surfaced directly on failed cards so it's
             discoverable without opening the dropdown menu (#726). */}
-        {isFailed ? (
+        {isFailed && canEdit ? (
           <div className="flex gap-2 pt-2 border-t">
             <Button
               variant="default"
@@ -466,6 +477,7 @@ function areEqual(prev: SourceCardProps, next: SourceCardProps): boolean {
     topicsEqual(p.topics, n.topics) &&
     prev.contextMode === next.contextMode &&
     prev.showRemoveFromNotebook === next.showRemoveFromNotebook &&
+    prev.canEdit === next.canEdit &&
     prev.className === next.className
   )
 }

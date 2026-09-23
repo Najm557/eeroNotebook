@@ -1,11 +1,88 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 from surreal_commands import get_command_status, submit_command
 
+from open_notebook.database.repository import ensure_record_id, repo_query
+from open_notebook.exceptions import AccessUnavailableError
+
+# Which argument names on a command record name a piece of member content, and
+# which kind of content that is. A job carries no owner - `command` has only app,
+# args, context, error_message, id, name, result and status - so this mapping is
+# how a job is resolved back to something access.py can decide on (spec task 6.4).
+#
+# Keys rather than positions because every command in this codebase names its
+# subject the same way: embed_source, create_insight and run_transformation all
+# pass `source_id`, and embed_note passes `note_id`.
+_CONTENT_ARG_KEYS: Dict[str, str] = {
+    "source_id": "source",
+    "note_id": "note",
+    "notebook_id": "notebook",
+}
+
 
 class CommandService:
     """Generic service layer for command operations"""
+
+    @staticmethod
+    async def content_for_job(job_id: str) -> Optional[Tuple[str, str]]:
+        """What member content a job acts on, as (kind, record id), or None.
+
+        None means the job is not about any one member's content - a
+        `rebuild_embeddings` run is instance-wide - and a caller enforcing access
+        should refuse rather than guess. There is no "unscopable so allow it"
+        branch here on purpose: a job result can be insight text.
+
+        Two resolution paths, because commands are submitted in two shapes:
+
+        1. The arguments name the content directly (`source_id`, `note_id`,
+           `notebook_id`).
+        2. `process_source` is submitted *before* its Source exists, so its
+           arguments name no source. The Source is linked to the job afterwards
+           (`source.command`), so that link is read in reverse.
+
+        Raises rather than answering None when the read fails, for the reason
+        access.py raises: "the database is unreachable" must not be
+        indistinguishable from "this job is about nothing you can see", because
+        the second silently passes a check that was meant to run.
+        """
+        try:
+            job = ensure_record_id(job_id if ":" in job_id else f"command:{job_id}")
+        except Exception:
+            logger.debug("unparseable command job id: {!r}", job_id)
+            return None
+
+        try:
+            rows = await repo_query("SELECT args FROM $job", {"job": job})
+        except Exception as exc:
+            logger.error("command job lookup failed: {}", exc)
+            raise AccessUnavailableError(
+                "Job access could not be determined because the database is "
+                "unavailable"
+            ) from exc
+
+        args = (rows[0].get("args") if rows else None) or {}
+        if isinstance(args, dict):
+            for key, kind in _CONTENT_ARG_KEYS.items():
+                value = args.get(key)
+                if value:
+                    return kind, str(value)
+
+        try:
+            linked = await repo_query(
+                "SELECT VALUE id FROM source WHERE command = $job", {"job": job}
+            )
+        except Exception as exc:
+            logger.error("command job source lookup failed: {}", exc)
+            raise AccessUnavailableError(
+                "Job access could not be determined because the database is "
+                "unavailable"
+            ) from exc
+
+        if linked and linked[0] is not None:
+            return "source", str(linked[0])
+
+        return None
 
     @staticmethod
     async def submit_command_job(
