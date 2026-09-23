@@ -11,6 +11,11 @@
         "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
         "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
         "timestamp": 1789144556830
+      },
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790173128916
       }
     ],
     "3.4 Validate the baseline end to end": [
@@ -75,6 +80,16 @@
         "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
         "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
         "timestamp": 1789144547621
+      },
+      {
+        "executionId": "5bcbcc20-1030-4f7e-8d10-761e803703af",
+        "chatSessionId": "sess_3adfbf7c-4d7a-4b2d-b6ef-4b348fe898e7",
+        "timestamp": 1790118003809
+      },
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790175529802
       }
     ],
     "6.2 Enforce ownership on every path": [
@@ -89,6 +104,16 @@
         "executionId": "2a8220a2-4240-4fd3-9e3f-6e0afba8425e",
         "chatSessionId": "sess_4cd95f5a-c703-4c84-ab03-da4ff285c6fe",
         "timestamp": 1789144547691
+      },
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790177275632
+      },
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790180136947
       }
     ],
     "7.1 Model Study_Progress per member": [
@@ -178,6 +203,128 @@
         "executionId": "744c0d57-0438-40a8-befa-2f0506fdd162",
         "chatSessionId": "sess_dd97725b-894d-44ab-ad01-6c4f960b498f",
         "timestamp": 1789226317806
+      }
+    ],
+    "6.4 Scope search and stop disclosing existence": [
+      {
+        "executionId": "5bcbcc20-1030-4f7e-8d10-761e803703af",
+        "chatSessionId": "sess_3adfbf7c-4d7a-4b2d-b6ef-4b348fe898e7",
+        "timestamp": 1790117996029
+      },
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790180140061
+      },
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790183355728
+      }
+    ],
+    "6.5 Build the access enforcement suite": [
+      {
+        "executionId": "5bcbcc20-1030-4f7e-8d10-761e803703af",
+        "chatSessionId": "sess_3adfbf7c-4d7a-4b2d-b6ef-4b348fe898e7",
+        "timestamp": 1790117996179
+      },
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790183379063
+      },
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790185548613
+      }
+    ],
+    "6.6 Settle the MCP interface": [
+      {
+        "executionId": "5bcbcc20-1030-4f7e-8d10-761e803703af",
+        "chatSessionId": "sess_3adfbf7c-4d7a-4b2d-b6ef-4b348fe898e7",
+        "timestamp": 1790117996308
+      },
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790183382286
+      },
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790185553453
+      }
+    ],
+    "6.7 Checkpoint — access control": [
+      {
+        "executionId": "5bcbcc20-1030-4f7e-8d10-761e803703af",
+        "chatSessionId": "sess_3adfbf7c-4d7a-4b2d-b6ef-4b348fe898e7",
+        "timestamp": 1790117996353
+      },
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790185578814
+      },
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790186089177
+      }
+    ],
+    "7.2 Test progress isolation": [
+      {
+        "executionId": "5bcbcc20-1030-4f7e-8d10-761e803703af",
+        "chatSessionId": "sess_3adfbf7c-4d7a-4b2d-b6ef-4b348fe898e7",
+        "timestamp": 1790117996401
+      }
+    ],
+    "8.6 Regenerate an artifact after its Sources change": [
+      {
+        "executionId": "5bcbcc20-1030-4f7e-8d10-761e803703af",
+        "chatSessionId": "sess_3adfbf7c-4d7a-4b2d-b6ef-4b348fe898e7",
+        "timestamp": 1790117996449
+      }
+    ],
+    "8.7 Test schema validation and retry": [
+      {
+        "executionId": "5bcbcc20-1030-4f7e-8d10-761e803703af",
+        "chatSessionId": "sess_3adfbf7c-4d7a-4b2d-b6ef-4b348fe898e7",
+        "timestamp": 1790117996492
+      }
+    ],
+    "8.8 Checkpoint — study artifacts": [
+      {
+        "executionId": "5bcbcc20-1030-4f7e-8d10-761e803703af",
+        "chatSessionId": "sess_3adfbf7c-4d7a-4b2d-b6ef-4b348fe898e7",
+        "timestamp": 1790117996534
+      }
+    ],
+    "2. Build the Inference Gateway": [
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790173129005
+      }
+    ],
+    "6.2 Enforce ownership on every REST route": [
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790175538182
+      },
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790177272661
+      }
+    ],
+    "6. Ownership and sharing": [
+      {
+        "executionId": "083399a5-51bc-441d-a059-79155026fe95",
+        "chatSessionId": "sess_f545d14d-1164-4513-b966-4daad26fdf8e",
+        "timestamp": 1790186089228
       }
     ]
   }
