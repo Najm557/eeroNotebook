@@ -301,7 +301,18 @@ services:
       # rewrites /api/* to the API inside the image, so one TLS origin covers
       # both (Requirement 13.5). Consequence: the UI is reached by name through
       # the proxy, not by http://<host>:8502, which stays a debugging path only.
-      API_URL: https://${EERONOTEBOOK_DOMAIN:-eeronotebook.local}
+      #
+      # Overridable, because that name is only reachable from a client holding
+      # BOTH a DNS entry and trust in the private CA, and task 4.1 could install
+      # neither — each needs a sudo this host does not grant, and client devices
+      # are out of reach. Until they are installed, a browser sent to this value
+      # cannot resolve it and the UI does not work at all, so the default is
+      # correct only for a finished deployment. Setting API_URL in deploy/.env
+      # points the browser somewhere it can actually reach; the obvious value is
+      # http://<host>:8502, which works for the same reason the comment above
+      # gives — the image rewrites /api/* internally — and has the added property
+      # of being same-origin, so no cross-origin request is involved.
+      API_URL: ${API_URL:-https://${EERONOTEBOOK_DOMAIN:-eeronotebook.local}}
     volumes:
       - app_data:/app/data
     depends_on:
