@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import apiClient from '@/lib/api/client'
 import { getApiUrl } from '@/lib/config'
+import { queryClient } from '@/lib/api/query-client'
 
 /**
  * Member sessions (spec task 5.4).
@@ -141,6 +142,15 @@ export const useAuthStore = create<AuthState>()(
 
           if (response.ok) {
             const session = (await response.json()) as SessionPayload
+            // Discard every cached query before the new session is live. Now
+            // that notebooks are per-member, a cache entry is another member's
+            // data: signing in after somebody else on the same browser would
+            // otherwise render THEIR notebook list, titles and descriptions
+            // included, for as long as staleTime lasts. The API never served it
+            // to this member - it is a display-level disclosure, and indexed
+            // caches cannot be told apart by member because the query keys
+            // carry no member id.
+            queryClient.clear()
             set({
               isAuthenticated: true,
               token: session.access_token,
@@ -266,6 +276,12 @@ export const useAuthStore = create<AuthState>()(
       },
 
       logout: () => {
+        // Cleared here as well as on login, because the two cover different
+        // failures: this one stops a signed-out member's data sitting in memory
+        // for the next person at the keyboard, and the login side covers a
+        // switch that never went through logout at all (a restored tab, or the
+        // 401 interceptor dropping the session).
+        queryClient.clear()
         set({
           isAuthenticated: false,
           token: null,
