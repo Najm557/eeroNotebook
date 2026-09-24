@@ -1,60 +1,31 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg width="240" height="240" viewBox="0 0 240 240" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- Gradient Definitions -->
+<svg width="240" height="240" viewBox="0 0 240 240" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="eeroNotebook">
+  <!--
+    eeroNotebook mark.
+
+    An "e" monogram rather than the node graph it replaces. The sidebar renders
+    this at 32x32, where fine detail disappears: upstream's five connecting lines
+    and eight circles turn to mush at that size, so the mark here is one bold
+    letterform with a single counter, which stays legible small. Drawn as stroked
+    geometry rather than a <text> element, because text would depend on a font
+    being present and would render differently per platform - or not at all.
+
+    Teal to emerald, deliberately not upstream's purple-to-cyan: at a glance the
+    point of the icon is to say which of the two applications this is.
+  -->
   <defs>
-    <linearGradient id="nodeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#bd34fe;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#41d1ff;stop-opacity:1" />
-    </linearGradient>
-    <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#bd34fe;stop-opacity:0.3" />
-      <stop offset="100%" style="stop-color:#41d1ff;stop-opacity:0.3" />
+    <linearGradient id="eeroBadge" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d9488;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#34d399;stop-opacity:1" />
     </linearGradient>
   </defs>
 
-  <!-- Connection Lines -->
-  <g class="connections">
-    <path d="M120 80L80 120" stroke="url(#lineGradient)" stroke-width="2"/>
-    <path d="M120 80L160 120" stroke="url(#lineGradient)" stroke-width="2"/>
-    <path d="M80 120L120 160" stroke="url(#lineGradient)" stroke-width="2"/>
-    <path d="M160 120L120 160" stroke="url(#lineGradient)" stroke-width="2"/>
-    <path d="M80 120L160 120" stroke="url(#lineGradient)" stroke-width="2"/>
-  </g>
+  <!-- Badge -->
+  <rect x="8" y="8" width="224" height="224" rx="56" fill="url(#eeroBadge)" />
 
-  <!-- Nodes -->
-  <g class="nodes">
-    <!-- Central Node -->
-    <circle cx="120" cy="80" r="20" fill="url(#nodeGradient)"/>
-    <circle cx="120" cy="80" r="24" stroke="url(#nodeGradient)" stroke-width="1" fill="none"/>
-    
-    <!-- Left Node -->
-    <circle cx="80" cy="120" r="16" fill="url(#nodeGradient)"/>
-    <circle cx="80" cy="120" r="20" stroke="url(#nodeGradient)" stroke-width="1" fill="none"/>
-    
-    <!-- Right Node -->
-    <circle cx="160" cy="120" r="16" fill="url(#nodeGradient)"/>
-    <circle cx="160" cy="120" r="20" stroke="url(#nodeGradient)" stroke-width="1" fill="none"/>
-    
-    <!-- Bottom Node -->
-    <circle cx="120" cy="160" r="18" fill="url(#nodeGradient)"/>
-    <circle cx="120" cy="160" r="22" stroke="url(#nodeGradient)" stroke-width="1" fill="none"/>
+  <!-- The "e": a bowl left open at the lower right, plus a crossbar. -->
+  <g stroke="#ffffff" stroke-width="23" stroke-linecap="round" fill="none">
+    <path d="M 168 120 A 48 48 0 1 0 152 156" />
+    <path d="M 74 120 L 166 120" />
   </g>
-
-  <!-- Pulse Animation -->
-  <style>
-    @keyframes pulse {
-      0% { transform: scale(1); opacity: 0.8; }
-      50% { transform: scale(1.1); opacity: 1; }
-      100% { transform: scale(1); opacity: 0.8; }
-    }
-    .nodes circle {
-      animation: pulse 3s infinite ease-in-out;
-    }
-    .nodes circle:nth-child(2n) {
-      animation-delay: 1s;
-    }
-    .nodes circle:nth-child(3n) {
-      animation-delay: 2s;
-    }
-  </style>
 </svg>

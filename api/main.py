@@ -220,8 +220,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Open Notebook API",
-    description="API for Open Notebook - Research Assistant",
+    title="eeroNotebook API",
+    description="API for eeroNotebook - Research Assistant",
     lifespan=lifespan,
 )
 

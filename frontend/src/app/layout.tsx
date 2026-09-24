@@ -13,7 +13,11 @@ import { I18nProvider } from "@/components/providers/I18nProvider";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Open Notebook",
+  // Not from t('common.appName'): this is Next.js metadata, evaluated on the
+  // server outside React, where the i18n hook is unavailable. The product name
+  // is the same in every locale, so the duplication costs nothing but must be
+  // kept in step with the appName key.
+  title: "eeroNotebook",
   description: "Privacy-focused research and knowledge management",
 };
 
