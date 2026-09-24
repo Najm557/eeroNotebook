@@ -307,11 +307,18 @@ services:
       # neither — each needs a sudo this host does not grant, and client devices
       # are out of reach. Until they are installed, a browser sent to this value
       # cannot resolve it and the UI does not work at all, so the default is
-      # correct only for a finished deployment. Setting API_URL in deploy/.env
-      # points the browser somewhere it can actually reach; the obvious value is
-      # http://<host>:8502, which works for the same reason the comment above
-      # gives — the image rewrites /api/* internally — and has the added property
-      # of being same-origin, so no cross-origin request is involved.
+      # correct only for a finished deployment. Set API_URL in deploy/.env to
+      # point the browser somewhere it can actually reach.
+      #
+      # Use the API's own port — http://<host>:5055 — and NOT :8502. Routing the
+      # browser through the frontend's own origin looks tidier, and every quick
+      # request works, which is what makes this worth writing down: the /api/*
+      # rewrite is a Next.js proxy, and it hangs up on a long request. Measured
+      # against this deployment: /api/auth/status and /api/notebooks answered 200
+      # through :8502, while "Ask" — one ~60s call to a 14B model — returned 500
+      # with "Failed to proxy ... socket hang up" in the app log, every time. The
+      # same question against :5055 answered 200 with citations. CORS defaults to
+      # a wildcard here, so the cross-origin call needs no further configuration.
       API_URL: ${API_URL:-https://${EERONOTEBOOK_DOMAIN:-eeronotebook.local}}
     volumes:
       - app_data:/app/data
