@@ -313,12 +313,22 @@ services:
       # Use the API's own port — http://<host>:5055 — and NOT :8502. Routing the
       # browser through the frontend's own origin looks tidier, and every quick
       # request works, which is what makes this worth writing down: the /api/*
-      # rewrite is a Next.js proxy, and it hangs up on a long request. Measured
-      # against this deployment: /api/auth/status and /api/notebooks answered 200
-      # through :8502, while "Ask" — one ~60s call to a 14B model — returned 500
-      # with "Failed to proxy ... socket hang up" in the app log, every time. The
-      # same question against :5055 answered 200 with citations. CORS defaults to
-      # a wildcard here, so the cross-origin call needs no further configuration.
+      # rewrite is a Next.js proxy with a 30 s default timeout
+      # (experimental.proxyTimeout, in next/dist/server/lib/router-utils/
+      # proxy-request.js), so a synchronous call that runs longer is cut off with
+      # "socket hang up" and answers 500. Measured against this deployment:
+      # /api/search/ask/simple (~60 s) failed through :8502 every time and
+      # answered 200 through :5055, while notebook chat (~19 s) passed through
+      # either. At risk are the synchronous LLM calls the UI makes through
+      # apiClient — notebook chat on a large context, and the transformation
+      # playground. The UI's streaming Ask and source chat are not: they call
+      # Next.js route handlers on a relative URL, so API_URL does not reach them.
+      #
+      # The same limit applies to the TLS default above, because mon-traefik
+      # routes eeronotebook.local to :8502. Once task 4.1's operator steps are
+      # done, https://api.eeronotebook.local — which it routes to :5055 directly —
+      # avoids that proxy (not yet measured through Traefik). CORS defaults to a
+      # wildcard here, so the cross-origin call needs no further configuration.
       API_URL: ${API_URL:-https://${EERONOTEBOOK_DOMAIN:-eeronotebook.local}}
     volumes:
       - app_data:/app/data
